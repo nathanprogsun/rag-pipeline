@@ -57,7 +57,9 @@ def test_search_result_has_failure_signals() -> None:
 
 
 def test_resolve_rerank_model() -> None:
-    req = SearchRequest(query="q", dataset_ids=[uuid.uuid4()], rerank_model="cohere")
+    req = SearchRequest(
+        query="q", dataset_ids=[uuid.uuid4()], rerank_model="qwen3-rerank"
+    )
 
     ds = Dataset(
         id=uuid.uuid4(),
@@ -67,6 +69,6 @@ def test_resolve_rerank_model() -> None:
         rerank_model=None,
     )
 
-    assert resolve_rerank_model(req, ds) == "cohere"
+    assert resolve_rerank_model(req, ds) == "qwen3-rerank"
     req2 = SearchRequest(query="q", dataset_ids=[uuid.uuid4()], use_rerank=False)
     assert resolve_rerank_model(req2, ds) is None
