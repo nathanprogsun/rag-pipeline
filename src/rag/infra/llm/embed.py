@@ -38,9 +38,12 @@ class _RetryableEmbeddings(OpenAIEmbeddings):
 
 
 def get_embed_model(model: str | None = None) -> OpenAIEmbeddings:
-    """获取 embed model。调用方通过 llm_sem.run("openai", ...) 进入限流。"""
+    """获取 embed model。调用方通过 llm_sem.run(\"embedding\", ...) 进入限流。"""
     return _RetryableEmbeddings(
         model=model or settings.openai_embedding_model,
         openai_api_key=settings.openai_embedding_api_key,
         openai_api_base=settings.openai_embedding_base_url,
+        dimensions=settings.openai_embedding_dim,
+        # DashScope compatible-mode 要求原始字符串输入，禁止 LangChain 预 tokenize
+        check_embedding_ctx_length=False,
     )

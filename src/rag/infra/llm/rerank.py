@@ -118,9 +118,16 @@ class NoOpRerank:
 
 
 def get_rerank_model(model: str | None = None) -> QwenRerank:
-    """获取 qwen3-rerank 客户端。调用方通过 llm_sem.run(\"dashscope\", ...) 进入限流。"""
+    """获取 qwen3-rerank 客户端。调用方通过 llm_sem.run(\"rerank\", ...) 进入限流。"""
     return QwenRerank(
         api_key=settings.openai_rerank_api_key.get_secret_value(),
         base_url=settings.openai_rerank_base_url,
         model=model or settings.openai_rerank_model,
     )
+
+
+def get_reranker(model: str | None = None) -> Reranker:
+    """无 rerank API Key 时返回 NoOpRerank，否则返回 QwenRerank。"""
+    if not settings.openai_rerank_api_key.get_secret_value():
+        return NoOpRerank()
+    return get_rerank_model(model=model)

@@ -1,8 +1,8 @@
 import logging
 
 from langchain_core.runnables import Runnable
-from langchain_core.utils.function_calling import convert_pydantic_to_openai_function
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from rag.config import settings
 
@@ -30,11 +30,13 @@ def get_chat_model(
         base_url=base_url or settings.openai_base_url,
         timeout=timeout,
         max_retries=max_retries,
+        # 设置 reasoning_split=True 将思考内容分离到 reasoning_details 字段
+        extra_body={"reasoning_split": True},
     )
 
 
 def get_structured_chat_model(
-    schema: type,
+    schema: type[BaseModel],
     temperature: float = 0.1,
     timeout: float = _LLM_TIMEOUT_SECONDS,
     max_retries: int = 0,
@@ -42,7 +44,7 @@ def get_structured_chat_model(
     api_key: str | None = None,
     model: str | None = None,
 ) -> Runnable:
-    """带结构化输出能力的 chat model (function_calling only, B3 兼容)。"""
+    """带结构化输出能力的 chat model（LangChain tools + function_calling）。"""
     base = get_chat_model(
         model=model,
         temperature=temperature,
@@ -51,8 +53,4 @@ def get_structured_chat_model(
         base_url=base_url,
         api_key=api_key,
     )
-    fn_schema = convert_pydantic_to_openai_function(schema)
-    return base.bind(
-        functions=[fn_schema],
-        function_call={"name": fn_schema["name"]},
-    )
+    return base.with_structured_output(schema, method="function_calling")
