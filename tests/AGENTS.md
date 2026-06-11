@@ -1,8 +1,13 @@
 # 测试规范（`tests/`）
 
-- 测试函数同样遵守根 `AGENTS.md` 的类型规则：参数 + `-> None` 返回值。
+- 测试函数/方法同样遵守根 `AGENTS.md` 的类型规则：参数 + `-> None` 返回值。
 - fixture 使用精确类型（如 `AsyncGenerator[AsyncSession, None]`），不用裸 `Any`。
 - 提交前：`make lint`、`make test`。
+
+## 组织形式
+
+- **优先 class**：同一被测模块/类型的用例集用 `class TestXxx:` 组织（与 `tests/integration/test_chunk_repo.py` 一致）；方法名 `test_*`，类内共享状态用 `setup_method` / `teardown_method` 或 `@pytest.mark.usefixtures(...)`。
+- **函数式例外**：零散的 domain 单断言（如 `tests/unit/test_domain.py`）可保留顶层 `def test_*`，不必强行套 class。
 
 ## 单元测试（`tests/unit/`）
 

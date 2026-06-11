@@ -80,8 +80,8 @@ class ChunkRepository:
         self,
         dataset_id: uuid.UUID,
         parent_title: str,
-        lo: int,
-        hi: int,
+        lo: int,  # lower index, 下限
+        hi: int,  # higher index, 上限
     ) -> list[ChunkModel]:
         stmt = (
             select(ChunkModel)

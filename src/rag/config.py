@@ -1,8 +1,16 @@
 import os
 from typing import Any
 
-from pydantic import PostgresDsn, RedisDsn, SecretStr
+from pydantic import BaseModel, PostgresDsn, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class CacheSettings(BaseModel):
+    query_ext_enabled: bool = False
+    l1_ttl: int = 86400  # L1 embedding：text→vector，默认 24h；模型切换时主动失效
+    l2_ttl: int = 1800  # L2 query extension：LLM 查询扩展，默认 30min
+    l3_ttl: int = 300  # L3 search：检索结果，默认 5min；chunk 变更时按 dataset 失效
+    l4_ttl: int = 3600  # L4 rerank：重排结果，默认 1h
 
 
 class Settings(BaseSettings):
@@ -40,6 +48,8 @@ class Settings(BaseSettings):
     openai_rerank_base_url: str = "https://dashscope.aliyuncs.com/compatible-api/v1"
     openai_rerank_api_key: SecretStr = SecretStr("")
     openai_rerank_model: str = "qwen3-rerank"
+
+    cache: CacheSettings = CacheSettings()
 
     @property
     def llm_settings(self) -> dict[str, Any]:
