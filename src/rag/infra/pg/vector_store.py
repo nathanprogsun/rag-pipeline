@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from typing import Literal, cast
 
@@ -8,10 +7,14 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.infra.pg.database import AsyncSessionLocal
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
+from rag.infra.pg.runnable_sync import run_coroutine_sync
 
 
 class VectorRetriever(Runnable):
-    """pgvector HNSW 检索。每次 search 创建新 session, 完成后自动回收。"""
+    """pgvector HNSW 检索；Runnable 契约与 ``FulltextRetriever`` 相同（见该类 docstring）。
+
+    每次 search 创建新 session, 完成后自动回收。
+    """
 
     def __init__(self, dataset_id: uuid.UUID, embed_model: Embeddings) -> None:
         self.dataset_id = dataset_id
@@ -61,8 +64,4 @@ class VectorRetriever(Runnable):
         config: RunnableConfig | None = None,
         **kwargs: object,  # Runnable.invoke 基类要求 **kwargs，本实现未消费
     ) -> list[ScoredDocument]:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        return asyncio.run(self.ainvoke(input, config))
+        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))

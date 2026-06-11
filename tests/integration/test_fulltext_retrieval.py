@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.infra.pg.fulltext_store import FulltextRetriever, build_tsvector
+from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
+from rag.infra.pg.fulltext_store import FulltextRetriever
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 
@@ -56,7 +57,11 @@ async def test_chinese_tokenization_and_search(db_session: AsyncSession) -> None
     )
     db_session.add(chunk)
     await db_session.flush()
-    await _set_tsvector(db_session, chunk.id, build_tsvector("Python 教程 入门"))
+    await _set_tsvector(
+        db_session,
+        chunk.id,
+        ChineseTokenizer().build_tsvector("Python 教程 入门"),
+    )
     await db_session.commit()
 
     retriever = FulltextRetriever(dataset_id=dataset_id)

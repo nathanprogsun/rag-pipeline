@@ -1,44 +1,41 @@
-import asyncio
 import uuid
 from typing import Literal, cast
 
-import jieba
 from langchain_core.runnables import Runnable, RunnableConfig
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.database import AsyncSessionLocal
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-
-_jieba_loaded = False
-
-
-def _ensure_jieba() -> None:
-    global _jieba_loaded
-    if not _jieba_loaded:
-        jieba.initialize()
-        _jieba_loaded = True
-
-
-def tokenize_chinese(text: str) -> list[str]:
-    """应用层 jieba 分词, 空格 join 用于 tsvector。"""
-    _ensure_jieba()
-    return [t for t in jieba.cut_for_search(text) if t.strip()]
-
-
-def build_tsvector(text: str) -> str:
-    """把 jieba 分词结果转 tsvector 字面量。"""
-    tokens = tokenize_chinese(text)
-    return " ".join(tokens)
+from rag.infra.pg.runnable_sync import run_coroutine_sync
 
 
 class FulltextRetriever(Runnable):
-    """jieba 预分词 + tsvector GIN 检索。每次 search 创建新 session。"""
+    """jieba 预分词 + PostgreSQL tsvector GIN 全文检索。
 
-    def __init__(self, dataset_id: uuid.UUID) -> None:
+    实现 LangChain ``Runnable``，与 ``VectorRetriever`` 对齐，便于 LCEL 编排：
+
+    - **统一 I/O**：``{"query": str, "top_k": int}`` → ``list[ScoredDocument]``，
+      其中 ``source="fulltext"``（向量侧为 ``"vector"``）。
+    - **LCEL 可组合**：可与 ``|``、``RunnableParallel`` 等拼链路，例如
+      向量 + 全文并行检索 → RRF 融合 → LLM；``RunnableConfig`` 支持 tracing。
+    - **双 API**：
+      - ``search(query, top_k)`` — 项目内直接 ``await`` 的语义化入口；
+      - ``ainvoke(input_dict)`` / ``invoke(input_dict)`` — Runnable 协议，供链式编排。
+
+    每次 ``search`` 创建独立 ``AsyncSession``，用完即关。
+    """
+
+    def __init__(
+        self,
+        dataset_id: uuid.UUID,
+        tokenizer: ChineseTokenizer | None = None,
+    ) -> None:
         self.dataset_id = dataset_id
+        self.tokenizer = tokenizer or ChineseTokenizer()
 
     async def search(self, query: str, top_k: int = 10) -> list[ScoredDocument]:
-        tokens = tokenize_chinese(query)
+        tokens = self.tokenizer.tokenize(query)
         ts_query = " & ".join(tokens)
         async with AsyncSessionLocal() as session:
             repo = ChunkRepository(session)
@@ -83,8 +80,4 @@ class FulltextRetriever(Runnable):
         config: RunnableConfig | None = None,
         **kwargs: object,  # Runnable.invoke 基类要求 **kwargs，本实现未消费
     ) -> list[ScoredDocument]:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        return asyncio.run(self.ainvoke(input, config))
+        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
