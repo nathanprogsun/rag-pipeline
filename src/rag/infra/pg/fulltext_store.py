@@ -1,30 +1,46 @@
 import uuid
 from typing import Literal, cast
 
-from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable, RunnableConfig
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.database import AsyncSessionLocal
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.infra.pg.runnable_sync import run_coroutine_sync
 
 
-class VectorRetriever(Runnable):
-    """pgvector HNSW 检索；Runnable 契约与 ``FulltextRetriever`` 相同（见该类 docstring）。
+class FulltextRetriever(Runnable):
+    """jieba 预分词 + PostgreSQL tsvector GIN 全文检索。
 
-    每次 search 创建新 session, 完成后自动回收。
+    实现 LangChain ``Runnable``，与 ``VectorRetriever`` 对齐，便于 LCEL 编排：
+
+    - **统一 I/O**：``{"query": str, "top_k": int}`` → ``list[ScoredDocument]``，
+      其中 ``source="fulltext"``（向量侧为 ``"vector"``）。
+    - **LCEL 可组合**：可与 ``|``、``RunnableParallel`` 等拼链路，例如
+      向量 + 全文并行检索 → RRF 融合 → LLM；``RunnableConfig`` 支持 tracing。
+    - **双 API**：
+      - ``search(query, top_k)`` — 项目内直接 ``await`` 的语义化入口；
+      - ``ainvoke(input_dict)`` / ``invoke(input_dict)`` — Runnable 协议，供链式编排。
+
+    每次 ``search`` 创建独立 ``AsyncSession``，用完即关。
     """
 
-    def __init__(self, dataset_id: uuid.UUID, embed_model: Embeddings) -> None:
+    def __init__(
+        self,
+        dataset_id: uuid.UUID,
+        tokenizer: ChineseTokenizer | None = None,
+    ) -> None:
         self.dataset_id = dataset_id
-        self.embed_model = embed_model
+        self.tokenizer = tokenizer or ChineseTokenizer()
 
     async def search(self, query: str, top_k: int = 10) -> list[ScoredDocument]:
-        vec = await self.embed_model.aembed_query(query)
+        tokens = self.tokenizer.tokenize(query)
+        ts_query = " & ".join(tokens)
         async with AsyncSessionLocal() as session:
             repo = ChunkRepository(session)
-            rows = await repo.search_by_vector(vec, self.dataset_id, top_k)
+            rows = await repo.search_by_fulltext(ts_query, self.dataset_id, top_k)
+
         return [
             ScoredDocument(
                 chunk_id=row.id,
@@ -32,7 +48,7 @@ class VectorRetriever(Runnable):
                 text=row.text,
                 score=score,
                 rank=i,
-                source="vector",
+                source="fulltext",
                 modality=cast(Literal["text", "image_caption"], row.modality),
                 image_path=row.image_path,
                 metadata=ChunkMetadata(
