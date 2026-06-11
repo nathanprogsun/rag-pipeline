@@ -1,5 +1,5 @@
 from rag.config import settings
 
 
-def test_settings_loads():
+def test_settings_loads() -> None:
     assert settings.openai_api_key.get_secret_value() != ""

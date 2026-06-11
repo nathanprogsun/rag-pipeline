@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     openai_max_concurrent: int = 8
 
     # Database
-    database_url: PostgresDsn = PostgresDsn("postgresql://rag:rag@localhost:5432/rag")
+    database_url: PostgresDsn = PostgresDsn(
+        "postgresql+asyncpg://rag:rag@localhost:5432/rag"
+    )
     redis_url: RedisDsn = RedisDsn("redis://localhost:6379/0")
 
     # Embedding
@@ -25,4 +27,4 @@ class Settings(BaseSettings):
     openai_embedding_dim: int = 1536
 
 
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()
