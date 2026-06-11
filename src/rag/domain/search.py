@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Protocol
 
 from pydantic import BaseModel
 
@@ -24,8 +25,8 @@ class SearchRequest(BaseModel):
     parent_doc_window: int = 0
     use_global_rerank: bool = False
     audit: bool = False
-    chat_bg: str = ""  # 多轮对话背景 
-    histories: list[dict] = []  # 对话历史 [{"role":"user","content":"..."}]
+    chat_bg: str = ""  # 多轮对话背景
+    histories: list[dict[str, str]] = []  # 对话历史 [{"role":"user","content":"..."}]
 
 
 class Citation(BaseModel):
@@ -49,8 +50,12 @@ class SearchResult(BaseModel):
     warnings: list[str] = []
 
 
-def resolve_rerank_model(req: SearchRequest, dataset) -> str | None:
+class RerankModelSource(Protocol):
+    rerank_model: str | None
+
+
+def resolve_rerank_model(req: SearchRequest, dataset: RerankModelSource) -> str | None:
     """解析 rerank 模型优先级: req.rerank_model > dataset.rerank_model > None。"""
     if not req.use_rerank:
         return None
-    return req.rerank_model or getattr(dataset, "rerank_model", None)
+    return req.rerank_model or dataset.rerank_model
