@@ -1,9 +1,8 @@
 import uuid
-from typing import Literal, cast
 
 from langchain_core.runnables import Runnable, RunnableConfig
 
-from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.domain.document import ScoredDocument
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.database import AsyncSessionLocal
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
@@ -43,24 +42,18 @@ class FulltextRetriever(Runnable):
 
         return [
             ScoredDocument(
-                chunk_id=row.id,
-                dataset_id=row.dataset_id,
-                text=row.text,
+                chunk_id=chunk.id,
+                dataset_id=chunk.dataset_id,
+                text=chunk.text,
                 score=score,
                 rank=i,
                 source="fulltext",
-                modality=cast(Literal["text", "image_caption"], row.modality),
-                image_path=row.image_path,
-                metadata=ChunkMetadata(
-                    dataset_id=row.dataset_id,
-                    datasource="file",
-                    filename=row.filename,
-                    parent_title=row.parent_title,
-                    chunk_index=row.chunk_index,
-                    created_at=row.created_at,
-                ),
+                modality=chunk.modality,
+                image_path=chunk.image_path,
+                metadata=chunk.metadata,
+                embedding=chunk.embedding,
             )
-            for i, (row, score) in enumerate(rows)
+            for i, (chunk, score) in enumerate(rows)
         ]
 
     async def ainvoke(

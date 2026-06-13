@@ -19,6 +19,7 @@ class TestCacheMetrics:
 
     async def test_unavailable_counter(self) -> None:
         cache = Cache(url="redis://127.0.0.1:1")
+        await cache.connect()
         await cache.get("k", layer="L1")
         assert cache.metrics["L1"]["unavailable"] == 1
         assert cache.metrics["L1"]["miss"] == 0
@@ -32,6 +33,7 @@ class TestCacheMetrics:
                 captured.append(record)
 
         cache = Cache(url="redis://127.0.0.1:1")
+        await cache.connect()
         handler = CaptureHandler()
         logger = logging.getLogger("rag.infra.cache.connection")
         logger.setLevel(logging.INFO)

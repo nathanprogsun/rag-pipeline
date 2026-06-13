@@ -17,7 +17,7 @@ _LAYER_TTL_ATTR: dict[str, str] = {
 }
 
 
-def _create_client(url: str) -> aioredis.Redis:
+async def _create_client(url: str) -> aioredis.Redis:
     return aioredis.from_url(
         url,
         decode_responses=True,
@@ -31,7 +31,9 @@ def _create_client(url: str) -> aioredis.Redis:
 class Cache:
     def __init__(self, url: str | None = None) -> None:
         self.url = url or str(settings.redis_url)
-        self._client: aioredis.Redis | None = _create_client(self.url)
+        # client 在 ``init_cache()`` 阶段创建, 不在 import 时同步连接, 避免
+        # 进程启动期阻塞 / 端口未就绪时抛错。
+        self._client: aioredis.Redis | None = None
         self.metrics: dict[str, dict[str, int]] = {
             "L1": {"hit": 0, "miss": 0, "unavailable": 0},
             "L2": {"hit": 0, "miss": 0, "unavailable": 0},
@@ -42,7 +44,7 @@ class Cache:
     async def connect(self) -> None:
         """`close()` 之后重建 client；与 PG `init_pool()` 对称，正常 import 后无需调用。"""
         if self._client is None:
-            self._client = _create_client(self.url)
+            self._client = await _create_client(self.url)
 
     async def close(self) -> None:
         if self._client is not None:
@@ -162,7 +164,7 @@ cache = Cache()
 
 
 async def init_cache() -> None:
-    """验证 Redis 连通性。client 在 import 时已创建，与 PG `init_pool()` 对称。"""
+    """验证 Redis 连通性。client 在 init 阶段创建, 与 PG `init_pool()` 对称。"""
     await cache.connect()
     await cache.client.ping()
 

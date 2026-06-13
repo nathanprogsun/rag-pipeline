@@ -1,0 +1,11 @@
+Plain text fixture for reader tests.
+
+This is a multi-line UTF-8 sample containing English, 中文, and emoji 🎉.
+Line 1: hello world
+Line 2: 你好世界
+Line 3: numbers 1234567890
+
+Used by:
+  - tests/unit/test_adapter_text.py
+  - tests/unit/test_reader_e2e.py
+  - tests/integration/...

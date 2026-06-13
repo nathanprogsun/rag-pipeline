@@ -6,6 +6,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rag.domain.document import Chunk as DomainChunk
+from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
@@ -92,10 +94,16 @@ class TestChunkRepository:
     ) -> None:
         dataset_id = await _create_dataset(db_session)
         chunks = [
-            ChunkModel(
+            DomainChunk(
+                id=uuid.uuid4(),
                 dataset_id=dataset_id,
                 text=f"chunk-{i}",
-                chunk_index=i,
+                modality="text",
+                metadata=DomainChunkMetadata(
+                    dataset_id=dataset_id,
+                    datasource="file",
+                    chunk_index=i,
+                ),
                 embedding=_embedding(i / EMBED_DIM),
             )
             for i in range(3)
@@ -125,7 +133,7 @@ class TestChunkRepository:
 
         siblings = await chunk_repo.get_siblings(dataset_id, parent, lo=1, hi=2)
 
-        assert [c.chunk_index for c in siblings] == [1, 2]
+        assert [c.metadata.chunk_index for c in siblings] == [1, 2]
         assert [c.text for c in siblings] == ["sibling-1", "sibling-2"]
 
     async def test_delete_by_filename_soft_deletes(

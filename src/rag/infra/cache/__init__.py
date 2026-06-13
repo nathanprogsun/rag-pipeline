@@ -8,17 +8,3 @@ from rag.infra.cache.keys import (
     search_key,
     search_key_pattern_for_dataset,
 )
-
-__all__ = [
-    "Cache",
-    "NAMESPACE",
-    "cache",
-    "close_cache",
-    "init_cache",
-    "dataset_version_key",
-    "embedding_key",
-    "query_ext_key",
-    "rerank_key",
-    "search_key",
-    "search_key_pattern_for_dataset",
-]

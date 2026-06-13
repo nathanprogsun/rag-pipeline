@@ -29,6 +29,6 @@ class Dataset(BaseModel):
     query_select_alpha: float = 0.3  # submodular α (0=多样性, 1=相关性)
     vector_weight: float = 0.7
     fulltext_weight: float = 0.3
-    prompt_template: str = ""
+    prompt_template: str | None = None  # None → DEFAULT_PROMPT_TEMPLATE
     system_prompt: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

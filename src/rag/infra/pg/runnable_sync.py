@@ -1,9 +1,8 @@
 import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any
 
 
-def run_coroutine_sync[T](make_coro: Callable[[], Coroutine[Any, Any, T]]) -> T:
+def run_coroutine_sync[T](make_coro: Callable[[], Coroutine[None, None, T]]) -> T:
     """在同步 ``invoke`` 中驱动 async ``ainvoke``（无已运行 event loop 时）。
 
     接受 coroutine 工厂而非已创建的 coroutine，以便在检测到 running loop 时
