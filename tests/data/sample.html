@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sample HTML Fixture</title>
+    <style>body { font-family: sans-serif; }</style>
+</head>
+<body>
+    <h1>Sample HTML Document</h1>
+    <p>This is a <strong>sample</strong> HTML file used by reader tests.</p>
+    <h2>Section A</h2>
+    <p>段落: 这是一段中文, 用于测试 HTML reader 对中文的处理。</p>
+    <script>alert('this should be stripped');</script>
+    <ul>
+        <li>item 1</li>
+        <li>item 2</li>
+    </ul>
+    <table border="1">
+        <tr><th>Col 1</th><th>Col 2</th></tr>
+        <tr><td>A</td><td>B</td></tr>
+    </table>
+    <footer>footer content (not a real script/style but tests body filtering)</footer>
+</body>
+</html>

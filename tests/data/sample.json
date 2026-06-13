@@ -1,0 +1,20 @@
+[
+  {
+    "title": "First Article",
+    "content": "This is the content of the first article. It contains multiple sentences for testing.",
+    "author": "Alice",
+    "tags": ["test", "sample"]
+  },
+  {
+    "title": "Second Article",
+    "content": "Second article body. 中文段落测试。",
+    "author": "Bob",
+    "tags": ["json", "fixture"]
+  },
+  {
+    "title": "Third Article",
+    "content": "Third article body — no tags, no author, just text.",
+    "author": null,
+    "tags": []
+  }
+]

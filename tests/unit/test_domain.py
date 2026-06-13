@@ -2,7 +2,12 @@ import uuid
 
 from rag.domain.dataset import Dataset
 from rag.domain.document import Chunk, ChunkMetadata, ScoredDocument
-from rag.domain.search import SearchRequest, SearchResult, resolve_rerank_model
+from rag.domain.search import (
+    RetrievalConfig,
+    SearchRequest,
+    SearchResult,
+    resolve_rerank_model,
+)
 
 
 def test_dataset_creation() -> None:
@@ -14,8 +19,8 @@ def test_dataset_creation() -> None:
     )
     assert ds.vector_weight == 0.7  # default
     assert (
-        ds.prompt_template == ""
-    )  # empty default, app falls back to DEFAULT_PROMPT_TEMPLATE
+        ds.prompt_template is None
+    )  # None default, app falls back to DEFAULT_PROMPT_TEMPLATE
 
 
 def test_chunk_requires_dataset_id() -> None:
@@ -45,9 +50,9 @@ def test_scored_document_has_image_path() -> None:
 
 def test_search_request_minimum_fields() -> None:
     req = SearchRequest(query="q", dataset_ids=[uuid.uuid4()])
-    assert req.top_k == 10
-    assert req.use_rerank is True
-    assert req.query_decomposition is False  # default off
+    assert req.retrieval.top_k == 10
+    assert req.retrieval.use_rerank is True
+    assert req.context.query_decomposition is False  # default off
 
 
 def test_search_result_has_failure_signals() -> None:
@@ -58,7 +63,9 @@ def test_search_result_has_failure_signals() -> None:
 
 def test_resolve_rerank_model() -> None:
     req = SearchRequest(
-        query="q", dataset_ids=[uuid.uuid4()], rerank_model="qwen3-rerank"
+        query="q",
+        dataset_ids=[uuid.uuid4()],
+        retrieval=RetrievalConfig(rerank_model="qwen3-rerank"),
     )
 
     ds = Dataset(
@@ -70,5 +77,9 @@ def test_resolve_rerank_model() -> None:
     )
 
     assert resolve_rerank_model(req, ds) == "qwen3-rerank"
-    req2 = SearchRequest(query="q", dataset_ids=[uuid.uuid4()], use_rerank=False)
+    req2 = SearchRequest(
+        query="q",
+        dataset_ids=[uuid.uuid4()],
+        retrieval=RetrievalConfig(use_rerank=False),
+    )
     assert resolve_rerank_model(req2, ds) is None

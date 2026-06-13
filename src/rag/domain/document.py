@@ -4,12 +4,19 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from rag.domain.enums import StoredDatasource
+
 
 class ChunkMetadata(BaseModel):
-    """Chunk 的元数据载荷: 定位与溯源信息。"""
+    """Chunk 的元数据载荷: 定位与溯源信息。
+
+    ``datasource`` 用 ``StoredDatasource`` 而非 ``Datasource``: 这是落库语义
+    ('file' / 'manual' / 'api'), ingest 阶段的 'url' 已通过
+    ``ingest_to_stored_datasource`` 在 pipeline 边界映射。
+    """
 
     dataset_id: uuid.UUID
-    datasource: Literal["file", "manual", "api"]
+    datasource: StoredDatasource
     filename: str | None = None
     parent_title: str = ""
     chunk_index: int = 0
@@ -33,10 +40,10 @@ class ScoredDocument(BaseModel):
     """召回结果: RRF 公式需要 score + rank 同时存。
 
     扩展字段:
-    - q / a: 触发该 chunk 的 query 变体与该变体下的 top-1 答案片段,
-             用于 ``remove_duplicates`` 按 (q, a) 元组做去重。
     - rerank_score: rerank 模型返回的独立相关性分数 (0~1),
              在 ``filter_by_score`` 切换 rerank 模式时取代 score 进行阈值过滤。
+    - (q, a) 溯源字段已迁出: 见 ``rag.retrieval.trace.RetrievalTrace``,
+             与 ``ScoredDocument`` 解耦, 只在去重 / 链路阶段按平行数组传入。
     """
 
     chunk_id: uuid.UUID
@@ -49,6 +56,4 @@ class ScoredDocument(BaseModel):
     image_path: str | None = None  # modality=image_caption 时有值, cite 组装引用用
     metadata: ChunkMetadata
     embedding: list[float] | None = None
-    q: str | None = None  # remove_duplicates 用: 触发该 chunk 的 query 变体
-    a: str | None = None  # remove_duplicates 用: 该变体下 chunk 的 top-1 答案片段
     rerank_score: float | None = None  # filter_by_score 切换 rerank 时用的相关性分数

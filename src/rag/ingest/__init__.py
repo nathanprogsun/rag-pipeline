@@ -1,1 +1,1 @@
-# Ingest package — reader / structure / chunker / pipeline
+# Ingest package — reader / chunker / pipeline
