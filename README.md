@@ -294,3 +294,13 @@ Sub-`AGENTS.md` files carry layer-specific rules: `src/rag/domain/AGENTS.md`,
 3. Make changes inside `src/rag/` or `tests/`, then run `make lint && make test`.
 4. Update `AGENTS.md` (root or sub) if you introduce a new convention that other agents
    need to follow.
+
+## See also
+
+- [docs/architecture.md](docs/architecture.md) — high-level design + 9 cross-task Contract map
+- [docs/dev.md](docs/dev.md) — local dev workflow + conventions
+- [project-template/](project-template/) — skeleton for new projects (5k)
+- [Dockerfile](Dockerfile) + [docker-compose.yml](docker-compose.yml) — 5k deployment
+- [AGENTS.md](AGENTS.md) — Claude/agent instructions for this repo
+- `.agents/design/2026-06-14-cross-task-contracts.md` — 9 cross-task contracts
+- `.github/workflows/ci.yml` — CI pipeline (5j)
