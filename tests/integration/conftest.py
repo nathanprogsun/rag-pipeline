@@ -8,6 +8,7 @@ Ingest 端到端（真实 LLM + 真实 fixture）:
 - ``sample_data_dir``: tests/data 目录（10 个内置 sample.*）
 - ``real_llm_chat_model``: langchain ChatOpenAI（OPENAI_API_KEY 缺则 skip）
 - ``pipeline_with_llm``: 预装 StructureNormalizer(mode=FORCE) + Chunker 的 IngestPipeline
+- ``live_embed_model``: 真实 DashScope-compatible embedding（OPENAI_EMBEDDING_API_KEY 缺则 skip）
 
 ``live_llm`` 用例在 OPENAI_API_KEY 缺时 pytest.skip，不会污染 CI。
 """
@@ -18,12 +19,14 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
+from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from rag.config import settings
 from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.embed import get_embed_model
 from rag.infra.pg.base import Base
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.ingest.chunker import Chunker, ChunkSettings
@@ -87,6 +90,13 @@ def _require_api_key() -> str:
     return raw
 
 
+def _require_embedding_api_key() -> str:
+    raw = settings.openai_embedding_api_key.get_secret_value().strip()
+    if not raw:
+        pytest.skip("OPENAI_EMBEDDING_API_KEY not configured")
+    return raw
+
+
 @pytest.fixture(scope="session")
 def sample_data_dir() -> Path:
     """tests/data 目录：10 个内置 sample.* fixture。"""
@@ -118,3 +128,15 @@ def pipeline_with_llm(real_llm_chat_model: Runnable) -> IngestPipeline:
             mode=StructureMode.FORCE,
         ),
     )
+
+
+@pytest.fixture(scope="session")
+def live_embed_model() -> Embeddings:
+    """真实 DashScope-compatible embedding (text-embedding-v3 / 1536 dim)。
+
+    用于 5d2 orchestrator 集成测试：跨 dataset fan-out、真实 cosine 排序、
+    score_breakdown 阈值过滤等都依赖真实 embedding 的语义距离。
+    缺 OPENAI_EMBEDDING_API_KEY 立即 skip。
+    """
+    _require_embedding_api_key()
+    return get_embed_model()
