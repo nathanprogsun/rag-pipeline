@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint + Unit + Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rag_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/rag_test
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --extra dev 2>&1 || uv sync --extra dev
+
+      - name: Lint (ruff)
+        run: |
+          ruff check src tests
+
+      - name: Unit tests (no external deps)
+        # Skip live_llm tests (require DashScope API key not available in CI)
+        run: |
+          pytest tests/unit -v --tb=short -m "not live_llm" -q
+
+      - name: Integration tests (real PG, fake LLM)
+        # Integration tests use fake LLM (mock) + real PG via pgvector service.
+        # Tests marked live_llm (require real DashScope embedding/llm API) are skipped.
+        run: |
+          pytest tests/integration -v --tb=short -m "not live_llm" -q
+
+      - name: Coverage report
+        # Generate coverage from unit + integration runs.
+        # Skips live_llm tests (require external API).
+        run: |
+          pytest tests/unit tests/integration \
+            --cov=rag \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            -m "not live_llm" \
+            -q
+
+      - name: Upload coverage to Codecov (optional)
+        # Codecov integration commented out — enable by adding CODECOV_TOKEN secret.
+        # - uses: codecov/codecov-action@v4
+        #   with:
+        #     file: coverage.xml
+        #     fail_ci_if_error: false
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Lint: ruff" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit: tests/unit (no live_llm)" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration: tests/integration (real PG, mock LLM)" >> $GITHUB_STEP_SUMMARY
+          echo "- Coverage: coverage.xml (upload to Codecov optional)" >> $GITHUB_STEP_SUMMARY
