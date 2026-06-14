@@ -129,6 +129,94 @@ for chunk in result.chunks:
 `IngestPipeline.ingest` accepts `FileSource | UrlSource | BufferSource` (see
 `src/rag/ingest/source.py`).
 
+## Retrieval + Generation
+
+After chunks are persisted to Postgres (with `pgvector` embeddings), the
+search/generation pipeline (5a-5f) answers queries against ingested datasets.
+
+```python
+import asyncio
+import uuid
+from rag.pipeline.full import PipelineDeps, build_full_pipeline
+from rag.infra.llm.embed import get_embed_model
+from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.rerank import get_rerank_model
+from rag.domain.search import SearchRequest
+
+
+def make_pipeline():
+    deps = PipelineDeps(
+        embedder=get_embed_model(),
+        llm=get_structured_chat_model(),
+        rerank_client=get_rerank_model(),  # None if no key
+    )
+    return build_full_pipeline(deps)
+
+
+async def search():
+    pipeline = make_pipeline()
+    result = await pipeline.ainvoke(
+        SearchRequest(
+            query="Python 列表推导式 教程",
+            dataset_ids=[uuid.UUID("...")],
+            audit=True,  # write NDJSON if AuditTap configured
+        )
+    )
+    print(result.response)
+    for c in result.citations:
+        print(f"  [{c.source_name}] {c.content[:80]}")
+
+
+asyncio.run(search())
+```
+
+The pipeline runs the 10-stage Contract 8 ordering: query extension →
+per-dataset subgraph (vector + fulltext intra-fuse) → inter-variant
+fusion → rerank (pre-inter-fuse) → filter → parent_doc → cite → LLM
+generation. See [docs/architecture.md](docs/architecture.md) for the full
+flow diagram.
+
+### Retrieval evaluation
+
+`rag-eval` runs an EvalRunner against a JSONL dataset and aggregates
+retrieval metrics (recall@k, precision@k, hit_rate@k, mrr, ndcg@k):
+
+```bash
+# data/eval.jsonl format
+# {"query":"...","dataset_ids":["<uuid>"],"ground_truth_chunk_ids":["<uuid>"],"k":10}
+
+uv run rag-eval -d data/eval.jsonl --output json --output-path summary.json
+```
+
+Real RAGAS metrics (`ragas>=0.3,<0.4`) are available via
+`RagasRealRunner` in `rag.eval.ragas_real` — see
+[docs/architecture.md](docs/architecture.md#eval-loop-5h-5i) for the
+stub vs real selection trade-off.
+
+## Docker
+
+Single-image `rag-pipeline` CLI runner + `pgvector` + `redis` services
+via `docker compose`:
+
+```bash
+# Start postgres + redis (CLI runner profile opt-in)
+docker compose up -d
+
+# Run a CLI command in the rag image
+docker compose --profile cli run --rm rag rag-search \
+    -q "test query" \
+    --dataset-id <UUID>
+
+# Eval
+docker compose --profile cli run --rm rag rag-eval \
+    -d /data/eval.jsonl --output-path /data/summary.json
+```
+
+`Dockerfile` is multi-stage (uv + Python 3.13 + libpq). `.dockerignore`
+excludes tests / coverage / docs source. See
+[Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml)
+for details.
+
 ## Configuration
 
 ### Chunking (`ChunkSettings`)
