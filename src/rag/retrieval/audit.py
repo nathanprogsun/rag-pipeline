@@ -78,8 +78,11 @@ class AuditRecord(BaseModel):
         request sub-configs.
         """
         intermediate_count = len(result._intermediate_hits)
+        # Generate request_id if not provided (cast to str to satisfy mypy;
+        # model_fields[name].default_factory is a no-arg callable returning Any).
+        rid = request_id if request_id is not None else str(uuid.uuid4())
         return cls(
-            request_id=request_id or cls.model_fields["request_id"].default_factory(),
+            request_id=rid,
             query=req.query,
             dataset_ids=list(req.dataset_ids),
             image_urls=list(req.image_urls),

@@ -47,7 +47,8 @@ class CiteStageProtocol:
 
     def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
-    ) -> list[Citation]: ...
+    ) -> list[Citation]:
+        raise NotImplementedError
 
 
 # ---------- Default implementation ----------

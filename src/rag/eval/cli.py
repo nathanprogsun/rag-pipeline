@@ -23,7 +23,7 @@ import typer
 
 from rag.config import settings
 from rag.eval.runner import EvalRunner, EvalSummary
-from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
 from rag.pipeline.full import PipelineDeps, build_full_pipeline
@@ -109,7 +109,7 @@ def main(
 
     try:
         embedder = get_embed_model()
-        llm = get_structured_chat_model()
+        llm = get_chat_model()
         rerank = (
             get_rerank_model()
             if settings.openai_rerank_api_key.get_secret_value().strip()
