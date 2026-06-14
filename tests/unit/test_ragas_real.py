@@ -172,11 +172,12 @@ def test_init_binds_embeddings_to_answer_relevancy() -> None:
     assert runner._answer_relevancy.embeddings is not None
 
 
-def test_init_binds_both_to_context_precision() -> None:
-    """context_precision needs both LLM and embeddings."""
+def test_init_binds_llm_to_context_precision() -> None:
+    """context_precision in ragas 0.3 is LLM-only (no embeddings attribute)."""
     runner = RagasRealRunner(llm=_fake_llm(), embeddings=_fake_embeddings())
     assert runner._context_precision.llm is not None
-    assert runner._context_precision.embeddings is not None
+    # context_precision in ragas 0.3 doesn't take embeddings (LLM judge only)
+    assert not hasattr(runner._context_precision, "embeddings")
 
 
 # ---------- RagasRunner integration with real runner (smoke test) ----------

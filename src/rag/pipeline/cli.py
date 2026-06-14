@@ -25,7 +25,7 @@ from langchain_core.embeddings import Embeddings
 
 from rag.config import settings
 from rag.domain.search import SearchRequest
-from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
 from rag.pipeline.full import PipelineDeps, build_full_pipeline
@@ -49,9 +49,10 @@ def _build_embedder() -> Embeddings:
 def _build_llm() -> object:
     """Construct real LLM from settings.
 
-    Auto-disabled if OPENAI_API_KEY empty.
+    Auto-disabled if OPENAI_API_KEY empty. Uses plain chat model (no
+    structured output schema needed for citation prompt in 5f make_llm_gen).
     """
-    return get_structured_chat_model()
+    return get_chat_model()
 
 
 def _build_rerank_or_none() -> object:
@@ -197,6 +198,8 @@ def main(
         rerank_weight=rerank_weight,
     )
     pipeline = build_full_pipeline(deps)
+    # dataset_id is required (validated above), so list(...) is non-None here.
+    assert dataset_id is not None
     req = SearchRequest(query=query, dataset_ids=list(dataset_id), audit=audit)
 
     try:

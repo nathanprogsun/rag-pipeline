@@ -38,8 +38,9 @@ Usage::
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from ragas.dataset_schema import SingleTurnSample
 from ragas.embeddings import LangchainEmbeddingsWrapper
@@ -95,8 +96,8 @@ class RagasRealRunner:
         self._answer_relevancy.embeddings = wrapped_embeddings
 
         self._context_precision = context_precision
+        # context_precision in ragas 0.3 is LLM-only (no embeddings attribute).
         self._context_precision.llm = wrapped_llm
-        self._context_precision.embeddings = wrapped_embeddings
 
     async def compute(
         self,
@@ -126,7 +127,11 @@ class RagasRealRunner:
             ("context_precision", self._context_precision),
         ):
             try:
-                score = await metric.single_turn_score(sample)
+                # cast: ragas types single_turn_score as returning Any (not
+                # Awaitable); narrow to Awaitable[float] so mypy accepts await.
+                score = await cast(
+                    Awaitable[Any], metric.single_turn_score(sample)
+                )
                 out[name] = float(score)
             except Exception as e:
                 logger.warning(

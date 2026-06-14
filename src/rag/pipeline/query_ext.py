@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Protocol
+from typing import Protocol, cast
 
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,15 @@ class EmbedderLike(Protocol):
     """``rag.infra.llm.embed.get_embed_model()`` 返回对象的协议。"""
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class _LangChainChatModel(Protocol):
+    """Minimal LangChain BaseChatModel interface (sync invoke)."""
+
+    def invoke(
+        self,
+        messages: list[dict[str, str]],
+    ) -> object: ...
 
 
 # ---------- QueryExtensionRunnable ----------
@@ -138,7 +147,7 @@ class QueryExtensionRunnable:
         generate_count: int = DEFAULT_GENERATE_COUNT,
         k: int = DEFAULT_K,
         alpha: float = DEFAULT_ALPHA,
-        llm: object | None = None,
+        llm: _LangChainChatModel | None = None,
         embedder: EmbedderLike | None = None,
     ) -> None:
         self.model = model
@@ -148,8 +157,12 @@ class QueryExtensionRunnable:
         if llm is not None:
             self._llm = llm
         else:
-            # Structured output via function_calling: Pydantic 强类型, 无 JSON parse err
-            self._llm = get_structured_chat_model(QueryExtensionVariants, model=model)
+            # Structured output via function_calling: Pydantic 强类型, 无 JSON parse err.
+            # cast: Runnable's invoke has wider signature; we narrow to _LangChainChatModel.
+            self._llm = cast(
+                _LangChainChatModel,
+                get_structured_chat_model(QueryExtensionVariants, model=model),
+            )
         self._embedder = embedder  # lazy: loaded on first Stage 2 call
 
     # ---- Stage 1: LLM rewrite (structured output) ----
@@ -323,7 +336,8 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     nb = sum(y * y for y in b) ** 0.5
     if na == 0 or nb == 0:
         return 0.0
-    return dot / (na * nb)
+    result: float = dot / (na * nb)
+    return result
 
 
 def _marginal_gain(

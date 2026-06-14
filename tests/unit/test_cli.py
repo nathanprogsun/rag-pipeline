@@ -99,7 +99,7 @@ def test_search_text_output_runs_pipeline() -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.pipeline.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.pipeline.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.pipeline.cli.get_chat_model", return_value=fake_llm),
         patch("rag.pipeline.cli.build_full_pipeline") as mock_build,
     ):
         mock_pipeline = MagicMock()
@@ -125,7 +125,7 @@ def test_search_json_output_serializes() -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.pipeline.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.pipeline.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.pipeline.cli.get_chat_model", return_value=fake_llm),
         patch("rag.pipeline.cli.build_full_pipeline") as mock_build,
     ):
         mock_pipeline = MagicMock()
@@ -183,7 +183,7 @@ def test_search_audit_writes_to_path(
 
     with (
         patch("rag.pipeline.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.pipeline.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.pipeline.cli.get_chat_model", return_value=fake_llm),
         patch("rag.pipeline.cli.build_full_pipeline", return_value=real_pipeline),
     ):
         result = runner.invoke(
@@ -215,7 +215,7 @@ def test_search_audit_no_path_warns(
     fake_llm = MagicMock()
     with (
         patch("rag.pipeline.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.pipeline.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.pipeline.cli.get_chat_model", return_value=fake_llm),
         patch("rag.pipeline.cli.build_full_pipeline") as mock_build,
     ):
         mock_pipeline = MagicMock()
@@ -249,7 +249,7 @@ def test_search_multiple_dataset_ids() -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.pipeline.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.pipeline.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.pipeline.cli.get_chat_model", return_value=fake_llm),
         patch("rag.pipeline.cli.build_full_pipeline") as mock_build,
     ):
         mock_pipeline = MagicMock()
@@ -308,7 +308,7 @@ def test_eval_text_output(tmp_path: Path) -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.eval.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
@@ -336,7 +336,7 @@ def test_eval_json_output(tmp_path: Path) -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.eval.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
@@ -398,7 +398,7 @@ def test_eval_output_path_writes_file(tmp_path: Path) -> None:
     )
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.eval.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.EvalRunner", return_value=real_runner),
     ):
         result = runner.invoke(
@@ -426,7 +426,7 @@ def test_eval_warning_printed_to_stderr(tmp_path: Path) -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.eval.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
@@ -454,7 +454,7 @@ def test_eval_passes_correct_args_to_runner(tmp_path: Path) -> None:
     fake_llm = MagicMock()
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
-        patch("rag.eval.cli.get_structured_chat_model", return_value=fake_llm),
+        patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.build_full_pipeline") as mock_build,
         patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
     ):
