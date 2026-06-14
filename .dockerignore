@@ -1,0 +1,55 @@
+# .dockerignore — exclude files not needed in container image
+# Speeds up `docker build` and shrinks image size.
+
+# Version control
+.git/
+.gitignore
+
+# CI / dev artifacts
+.github/
+.agents/
+.understand-anything/
+.learn-progress
+
+# Python build / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Tests + coverage (not needed in runtime image)
+tests/
+coverage/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local config / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Documentation source (shipped in image via pyproject readme)
+docs/_build/
+
+# Project template + deployment assets
+project-template/
+deploy/
+
+# Logs / temp
+*.log
+tmp/

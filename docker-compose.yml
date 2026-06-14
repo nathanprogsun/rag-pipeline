@@ -1,17 +1,65 @@
+# docker-compose for local dev + demo.
+#
+# Usage:
+#   docker compose up -d            # start postgres + redis
+#   docker compose exec pg psql -U rag -d rag  # check
+#   docker compose --profile cli run --rm rag rag-ingest --help
+#   docker compose --profile cli run --rm rag rag-search -q "test" --dataset-id <UUID>
+#   docker compose --profile cli run --rm rag rag-eval -d /data/eval.jsonl
+#
+# Override env via .env file at repo root.
+
 services:
   pg:
     image: pgvector/pgvector:pg16
+    container_name: rag-postgres
     environment:
       POSTGRES_DB: rag
       POSTGRES_USER: rag
       POSTGRES_PASSWORD: rag
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
     command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
-    volumes: ["redisdata:/data"]
+    volumes:
+      - redisdata:/data
+
+  # Ad-hoc CLI runner — runs rag-ingest / rag-search / rag-eval on demand.
+  rag:
+    image: rag-pipeline:dev
+    container_name: rag-cli
+    profiles: ["cli"]  # only started with `docker compose --profile cli run`
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://rag:rag@pg:5432/rag
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-qwen-plus}
+      OPENAI_EMBEDDING_API_KEY: ${OPENAI_EMBEDDING_API_KEY:-}
+      OPENAI_EMBEDDING_BASE_URL: ${OPENAI_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-v3}
+      OPENAI_RERANK_API_KEY: ${OPENAI_RERANK_API_KEY:-}
+      OPENAI_RERANK_BASE_URL: ${OPENAI_RERANK_BASE_URL:-https://dashscope.aliyuncs.com/compatible-api/v1}
+      OPENAI_RERANK_MODEL: ${OPENAI_RERANK_MODEL:-qwen3-rerank}
+    depends_on:
+      pg:
+        condition: service_healthy
+    # No entrypoint by default — use `docker compose --profile cli run --rm rag <cmd>`.
 
 volumes:
   pgdata:

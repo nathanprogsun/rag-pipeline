@@ -1,0 +1,12 @@
+# Sample eval.jsonl format. Each line is one EvalRecord:
+#   {"query": "...", "dataset_ids": ["uuid"], "ground_truth_chunk_ids": ["uuid"], "k": 10}
+#
+# Generate ground truth after ingesting chunks:
+#   rag-ingest --mode file --path docs/ | tee ingested.jsonl
+#   rag-search -q "user query" --dataset-id <DS_UUID> --output json > retrieved.jsonl
+#   # Then hand-label each retrieved chunk as ground-truth or not.
+#
+# Or auto-generate via cross-validation over your test set.
+
+{"query": "What is rag-pipeline?", "dataset_ids": ["00000000-0000-0000-0000-000000000001"], "ground_truth_chunk_ids": ["00000000-0000-0000-0000-000000000010"], "k": 5}
+{"query": "How does retrieval work?", "dataset_ids": ["00000000-0000-0000-0000-000000000001"], "ground_truth_chunk_ids": ["00000000-0000-0000-0000-000000000011"], "k": 5}
