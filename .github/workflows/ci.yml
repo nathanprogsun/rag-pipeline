@@ -67,14 +67,18 @@ jobs:
         run: |
           pytest tests/integration -v --tb=short -m "not live_llm" -q
 
-      - name: Coverage report
+      - name: Coverage report (enforces ≥80% gate)
         # Generate coverage from unit + integration runs.
         # Skips live_llm tests (require external API).
+        # --cov-fail-under=80 enforces the project-wide 80% coverage gate
+        # documented in tests/AGENTS.md / docs/dev.md.
+        # Current baseline (2026-06): 92% — well above the 80% floor.
         run: |
           pytest tests/unit tests/integration \
             --cov=rag \
             --cov-report=xml:coverage.xml \
             --cov-report=term-missing \
+            --cov-fail-under=80 \
             -m "not live_llm" \
             -q
 
