@@ -27,8 +27,10 @@ class ChunkRepository:
         dataset_id: uuid.UUID,
         top_k: int = 10,
     ) -> list[tuple[DomainChunk, float]]:
+        # SET LOCAL 不支持参数化 SQL, 改用 f-string 字面量
+        # (ef 是 int, 无注入风险)
         await self.session.execute(
-            text("SET LOCAL hnsw.ef_search = :ef").bindparams(ef=max(top_k * 2, 40))
+            text(f"SET LOCAL hnsw.ef_search = {max(top_k * 2, 40)}")
         )
         stmt = (
             select(
@@ -51,22 +53,19 @@ class ChunkRepository:
         dataset_id: uuid.UUID,
         top_k: int = 10,
     ) -> list[tuple[DomainChunk, float]]:
+        # to_tsquery 不接受 multi-word 输入 (空格 syntax error)。
+        # 改用 websearch_to_tsquery (PG 11+), 像 Google 搜索一样处理空格。
+        ts_query_expr = func.websearch_to_tsquery("simple", ts_query)
         stmt = (
             select(
                 ChunkModel,
-                func.ts_rank(
-                    ChunkModel.ts_tokens, func.to_tsquery("simple", ts_query)
-                ).label("score"),
+                func.ts_rank(ChunkModel.ts_tokens, ts_query_expr).label("score"),
             )
             .where(
                 ChunkModel.dataset_id == dataset_id,
-                ChunkModel.ts_tokens.op("@@")(func.to_tsquery("simple", ts_query)),
+                ChunkModel.ts_tokens.op("@@")(ts_query_expr),
             )
-            .order_by(
-                func.ts_rank(
-                    ChunkModel.ts_tokens, func.to_tsquery("simple", ts_query)
-                ).desc()
-            )
+            .order_by(func.ts_rank(ChunkModel.ts_tokens, ts_query_expr).desc())
             .limit(top_k)
         )
         result = await self.session.execute(stmt)

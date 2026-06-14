@@ -56,6 +56,25 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
     await engine.dispose()
 
 
+@pytest.fixture
+async def pg_session_factory() -> AsyncGenerator:
+    """Yields an ``async_sessionmaker`` bound to a fresh engine on the test's loop.
+
+    Use this when you need MULTIPLE separate sessions (e.g. for parallel
+    retrievers in subgraph tests, to avoid shared-transaction conflicts).
+
+    Yields the ``async_sessionmaker``; engine is disposed at teardown.
+    """
+    engine = create_async_engine(str(settings.database_url))
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ingest 端到端（live_llm）
 # ─────────────────────────────────────────────────────────────────────────────
