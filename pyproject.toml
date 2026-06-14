@@ -64,6 +64,13 @@ markers = [
     "asyncio: mark test as async (pytest-asyncio)",
     "live_llm: real third-party LLM API calls (requires .env credentials)",
 ]
+filterwarnings = [
+    # SQLAlchemy 2.0 async engine 的 GC 路径触发 Connection._cancel 协程
+    # 未 await 警告。模块级 AsyncSessionLocal.engine 在 import 时创建, 进程
+    # 退出时 GC 路径无法访问事件循环。已在 conftest.py 显式 dispose, 但
+    # 部分 mock 触发的清理路径仍会冒出。功能无影响, 仅过滤噪音。
+    "ignore:coroutine 'Connection._cancel' was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 target-version = "py313"
