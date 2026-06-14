@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from rag.domain.enums import StoredDatasource
 
@@ -42,9 +42,17 @@ class ScoredDocument(BaseModel):
     扩展字段:
     - rerank_score: rerank 模型返回的独立相关性分数 (0~1),
              在 ``filter_by_score`` 切换 rerank 模式时取代 score 进行阈值过滤。
+    - score_breakdown: per-source raw scores preserved by fusion.
+             Empty dict means single-source path that didn't go through fusion.
+             Keys: 'vector' / 'fulltext' / 'caption' / 'rerank'.
+             On duplicate sightings across groups, fusion takes ``max`` per source
+             (对齐 FastGPT ``concatScore.find(type).value = max(...)`` 语义),
+             so the original raw similarity per source survives RRF accumulation.
     - (q, a) 溯源字段已迁出: 见 ``rag.retrieval.trace.RetrievalTrace``,
              与 ``ScoredDocument`` 解耦, 只在去重 / 链路阶段按平行数组传入。
     """
+
+    model_config = {"frozen": False}
 
     chunk_id: uuid.UUID
     dataset_id: uuid.UUID
@@ -57,3 +65,4 @@ class ScoredDocument(BaseModel):
     metadata: ChunkMetadata
     embedding: list[float] | None = None
     rerank_score: float | None = None  # filter_by_score 切换 rerank 时用的相关性分数
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
