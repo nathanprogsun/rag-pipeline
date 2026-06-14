@@ -109,12 +109,18 @@ jobs:
             -m "not live_llm" \
             -q
 
-      - name: Upload coverage to Codecov (optional)
-        # Codecov integration commented out — enable by adding CODECOV_TOKEN secret.
-        # - uses: codecov/codecov-action@v4
-        #   with:
-        #     file: coverage.xml
-        #     fail_ci_if_error: false
+      - name: Upload coverage to Codecov
+        # Uploads coverage.xml to Codecov for PR-comment integration.
+        # Requires CODECOV_TOKEN secret in repo settings (Settings → Secrets).
+        # fail_ci_if_error: false — don't break CI if Codecov is down.
+        # Token is optional for public repos (Codecov uses GitHub OAuth).
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unittests
+          name: rag-pipeline-coverage
 
       - name: Summary
         if: always()
