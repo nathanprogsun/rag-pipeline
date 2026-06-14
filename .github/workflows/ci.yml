@@ -35,6 +35,18 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/rag_test
       PYTHONUNBUFFERED: "1"
+      # Optional DashScope API keys for live integration tests (5i-ragas-int).
+      # Tests auto-skip when secrets are missing (see live_embed_model /
+      # real_llm_chat_model fixtures in tests/integration/conftest.py).
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      OPENAI_EMBEDDING_API_KEY: ${{ secrets.OPENAI_EMBEDDING_API_KEY }}
+      OPENAI_EMBEDDING_BASE_URL: ${{ secrets.OPENAI_EMBEDDING_BASE_URL }}
+      OPENAI_EMBEDDING_MODEL: ${{ secrets.OPENAI_EMBEDDING_MODEL }}
+      OPENAI_RERANK_API_KEY: ${{ secrets.OPENAI_RERANK_API_KEY }}
+      OPENAI_RERANK_BASE_URL: ${{ secrets.OPENAI_RERANK_BASE_URL }}
+      OPENAI_RERANK_MODEL: ${{ secrets.OPENAI_RERANK_MODEL }}
 
     steps:
       - uses: actions/checkout@v4
