@@ -56,7 +56,7 @@ def test_search_request_minimum_fields() -> None:
 
 
 def test_search_result_has_failure_signals() -> None:
-    r = SearchResult(citations=[], prompt="")
+    r = SearchResult(citations=[], response="")
     assert r.failed_dataset_ids == []
     assert r.warnings == []
 
