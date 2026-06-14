@@ -44,6 +44,26 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag"]
 
+[tool.coverage.run]
+source = ["src/rag"]
+branch = false
+
+[tool.coverage.report]
+# Project-wide 80% coverage gate, enforced by --cov-fail-under=80 in CI.
+# Current baseline (2026-06): 92%.
+# Per-module targets (tighter on critical paths):
+#   - rag.pipeline.*           ≥90% (orchestration correctness)
+#   - rag.eval.metrics/runner  ≥90% (eval accuracy)
+#   - rag.retrieval.*          ≥85% (audit + cite correctness)
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",
+]
+
 [project.optional-dependencies]
 dev = [
     "datasets>=3.0.0",
