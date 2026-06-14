@@ -56,6 +56,25 @@ jobs:
         run: |
           ruff check src tests
 
+      - name: Type check (mypy, advisory)
+        # Static type analysis. mypy>=1.11.0 is in dev deps (uv sync --extra dev).
+        # CI uses GitHub-hosted ubuntu-latest + setup-python 3.13 + uv, no pyenv,
+        # so mypy runs cleanly here (unlike local pyenv 3.13 environments).
+        # Strict mode per [tool.mypy] in pyproject.toml: warn_return_any,
+        # warn_unused_ignores, disallow_untyped_defs, no_implicit_optional.
+        # Excludes: pgvector, jieba, testcontainers, pypdf, docx, bs4, pptx,
+        # openpyxl, mammoth, data (third-party type stubs unavailable).
+        #
+        # Status (2026-06): ADVISORY (continue-on-error). mypy reports 10
+        # known issues in cli.py / ragas_real.py / query_ext.py / audit.py
+        # / cite.py tracked as TODO for the next iteration. Step is wired
+        # up so PRs get a mypy report visible in CI; once issues are fixed
+        # flip continue-on-error to false (or remove it) to make it gating.
+        # See docs/architecture.md for the contract-test → static-type chain.
+        continue-on-error: true
+        run: |
+          mypy src/rag --no-incremental || true
+
       - name: Unit tests (no external deps)
         # Skip live_llm tests (require DashScope API key not available in CI)
         run: |
