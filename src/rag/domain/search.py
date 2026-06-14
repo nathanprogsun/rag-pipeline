@@ -71,7 +71,15 @@ class SearchRequest(BaseModel):
 
 
 class Citation(BaseModel):
-    """返回给前端的引用条目 DTO。"""
+    """返回给前端的引用条目 DTO。
+
+    Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 5:
+    - ``position`` (1-based char offset of first ``[id](CITE)`` marker in
+      ``response``) 由 ``rag.pipeline.cite.resolve_citation_positions``
+      在 generation 之后填入; 1-based 与 ``SearchResult.citations`` 的
+      index 对齐 (``citations[0].position`` 对应 ``[1](CITE)``)。
+    - 不可解析到 marker 的 citation (response 中未引用) ``position=None``。
+    """
 
     chunk_id: uuid.UUID
     dataset_id: uuid.UUID
@@ -79,6 +87,7 @@ class Citation(BaseModel):
     content: str
     image_path: str | None = None
     score: float
+    position: int | None = None
     update_time: datetime | None = None
 
 
