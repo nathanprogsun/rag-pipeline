@@ -10,19 +10,10 @@ from rag.infra.pg.runnable_sync import run_coroutine_sync
 
 
 class FulltextRetriever(Runnable):
-    """jieba 预分词 + PostgreSQL tsvector GIN 全文检索。
+    """基于 jieba 预分词与 PostgreSQL `tsvector` GIN 索引的全文检索器。
 
-    实现 LangChain ``Runnable``，与 ``VectorRetriever`` 对齐，便于 LCEL 编排：
-
-    - **统一 I/O**：``{"query": str, "top_k": int}`` → ``list[ScoredDocument]``，
-      其中 ``source="fulltext"``（向量侧为 ``"vector"``）。
-    - **LCEL 可组合**：可与 ``|``、``RunnableParallel`` 等拼链路，例如
-      向量 + 全文并行检索 → RRF 融合 → LLM；``RunnableConfig`` 支持 tracing。
-    - **双 API**：
-      - ``search(query, top_k)`` — 项目内直接 ``await`` 的语义化入口；
-      - ``ainvoke(input_dict)`` / ``invoke(input_dict)`` — Runnable 协议，供链式编排。
-
-    每次 ``search`` 创建独立 ``AsyncSession``，用完即关。
+    实现 LangChain `Runnable` 协议，I/O 与 `VectorRetriever` 对齐，
+    便于 LCEL 链式编排（`source` 字段标识为 `"fulltext"`）。
     """
 
     def __init__(
@@ -30,10 +21,25 @@ class FulltextRetriever(Runnable):
         dataset_id: uuid.UUID,
         tokenizer: ChineseTokenizer | None = None,
     ) -> None:
+        """初始化全文检索器。
+
+        Args:
+            dataset_id: 数据集 ID，用于过滤检索范围。
+            tokenizer: 中文分词器，默认使用 `ChineseTokenizer`。
+        """
         self.dataset_id = dataset_id
         self.tokenizer = tokenizer or ChineseTokenizer()
 
     async def search(self, query: str, top_k: int = 10) -> list[ScoredDocument]:
+        """执行全文检索。
+
+        Args:
+            query: 原始查询文本。
+            top_k: 返回前 k 条结果。
+
+        Returns:
+            命中的文档列表，按相关度降序，`source="fulltext"`。
+        """
         tokens = self.tokenizer.tokenize(query)
         ts_query = " & ".join(tokens)
         async with AsyncSessionLocal() as session:
@@ -58,10 +64,11 @@ class FulltextRetriever(Runnable):
 
     async def ainvoke(
         self,
-        input: dict[str, object],  # Runnable 松散 dict；运行时含 query(str)、top_k(int)
+        input: dict[str, object],  # `Runnable` 协议入参；含 `query`(str)、`top_k`(int)
         config: RunnableConfig | None = None,
-        **kwargs: object,  # Runnable.ainvoke 基类要求 **kwargs，本实现未消费
+        **kwargs: object,  # `Runnable.ainvoke` 基类要求 `**kwargs`，本实现未消费
     ) -> list[ScoredDocument]:
+        """`Runnable` 异步入口：从 dict 中提取 `query` / `top_k` 并委派给 `search`."""
         query = str(input["query"])
         raw_top_k = input.get("top_k", 10)
         top_k = raw_top_k if isinstance(raw_top_k, int) else 10
@@ -69,8 +76,9 @@ class FulltextRetriever(Runnable):
 
     def invoke(
         self,
-        input: dict[str, object],  # Runnable 松散 dict；运行时含 query(str)、top_k(int)
+        input: dict[str, object],  # `Runnable` 协议入参；含 `query`(str)、`top_k`(int)
         config: RunnableConfig | None = None,
-        **kwargs: object,  # Runnable.invoke 基类要求 **kwargs，本实现未消费
+        **kwargs: object,  # `Runnable.invoke` 基类要求 `**kwargs`，本实现未消费
     ) -> list[ScoredDocument]:
+        """`Runnable` 同步入口：通过事件循环桥接调用 `ainvoke`."""
         return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))

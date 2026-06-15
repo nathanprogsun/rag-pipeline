@@ -162,7 +162,7 @@ def _run_ingest(
     pipeline = _build_pipeline(normalize=normalize)
     try:
         result = asyncio.run(pipeline.ingest(source, get_format_text=get_format_text))
-    except Exception as exc:  # noqa: BLE001 — CLI 边界统一兜底
+    except Exception as exc:  # noqa: BLE001
         _render_error(exc)
         raise typer.Exit(code=1) from exc
     _render_result(result, chunk_stats=chunk_stats)

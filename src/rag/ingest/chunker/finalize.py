@@ -1,4 +1,4 @@
-"""Chunker 收尾: enforce_max_size + merge_small + merge_to_target + sliding_window。"""
+"""收尾合并与滑动窗口: 合并小块、贴近目标大小、强制不超上限。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,15 @@ from .utils import valid_len
 
 
 def _join_chunk_pair(left: str, right: str) -> str:
-    """合并相邻 chunk, 交界处无换行时插入 ``\\n`` 保留 Markdown/HTML 结构。"""
+    """拼接相邻 chunk, 交界处无换行时补一个换行以保留 Markdown/HTML 结构。
+
+    Args:
+        left: 左块文本。
+        right: 右块文本。
+
+    Returns:
+        拼接结果。
+    """
     if not left:
         return right
     if not right:
@@ -21,7 +29,16 @@ def enforce_max_size(
     max_size: int,
     overlap_ratio: float,
 ) -> list[str]:
-    """每块都不超过 max_size, 超出走 sliding_window。"""
+    """保证每块不超过 `max_size`, 超出部分走 `sliding_window` 切分。
+
+    Args:
+        chunks: 候选 chunk 列表。
+        max_size: 单块硬上限。
+        overlap_ratio: 滑动窗口的重叠比例。
+
+    Returns:
+        处理后的 chunk 列表。
+    """
     result: list[str] = []
     for chunk in chunks:
         if valid_len(chunk) <= max_size:
@@ -32,19 +49,27 @@ def enforce_max_size(
 
 
 def merge_small_chunks(chunks: list[str], min_size: int) -> list[str]:
-    """把 < min_size 的块合并到相邻块 (优先后, 末尾优先前)。"""
+    """将有效长度不足 `min_size` 的块合并到相邻块 (优先后, 末尾向前合并)。
+
+    Args:
+        chunks: 候选 chunk 列表。
+        min_size: 最小块阈值。
+
+    Returns:
+        合并后的 chunk 列表。
+    """
     if not chunks:
         return chunks
 
     result = list(chunks)
     i = 0
     while i < len(result):
-        # 小于 min_size 且有后继 → 拼到下一块
+        # 小于阈值且有后继, 拼到下一块。
         if valid_len(result[i]) < min_size and i + 1 < len(result):
             result[i + 1] = _join_chunk_pair(result[i], result[i + 1])
             result.pop(i)
             continue
-        # 小于 min_size 且无后继但有前驱 → 拼到上一块
+        # 小于阈值且无后继但有前驱, 拼到上一块。
         if valid_len(result[i]) < min_size and i > 0:
             result[i - 1] = _join_chunk_pair(result[i - 1], result[i])
             result.pop(i)
@@ -58,7 +83,16 @@ def merge_chunks_to_target(
     target_size: int,
     max_size: int,
 ) -> list[str]:
-    """将相邻块合并直到 ``valid_len`` 接近 ``target_size`` (不超过 ``max_size``)。"""
+    """合并相邻块, 直到当前块有效长度接近 `target_size` 且不超 `max_size`。
+
+    Args:
+        chunks: 候选 chunk 列表。
+        target_size: 目标有效长度。
+        max_size: 合并硬上限。
+
+    Returns:
+        合并后的 chunk 列表。
+    """
     if not chunks or target_size <= 0:
         return chunks
 
@@ -68,7 +102,7 @@ def merge_chunks_to_target(
         combined = _join_chunk_pair(current, nxt)
         combined_len = valid_len(combined)
         current_len = valid_len(current)
-        # 当前块未达目标且合并后不超 max → 继续合并
+        # 当前块未达目标且合并后不超上限, 继续合并。
         if current_len < target_size and combined_len <= max_size:
             current = combined
             continue
@@ -79,7 +113,16 @@ def merge_chunks_to_target(
 
 
 def sliding_window(text: str, max_size: int, overlap_ratio: float) -> list[str]:
-    """字符级滑动窗口, 步长 = max_size * (1 - overlap_ratio)。"""
+    """字符级滑动窗口切分, 步长 = `max_size * (1 - overlap_ratio)`。
+
+    Args:
+        text: 待切分文本。
+        max_size: 单块大小。
+        overlap_ratio: 相邻块重叠比例。
+
+    Returns:
+        切分后的 chunk 列表。
+    """
     n = len(text)
     if n <= max_size:
         return [text]
@@ -91,7 +134,7 @@ def sliding_window(text: str, max_size: int, overlap_ratio: float) -> list[str]:
         chunks.append(text[start:end])
         if end >= n:
             break
-        # 若步长跳过会越界, 直接对齐到 max_size 边界
+        # 步长过短导致窗口无法前进时, 对齐到当前窗口末端。
         next_start = start + step
         if next_start < end and end < n:
             next_start = end

@@ -1,35 +1,8 @@
-"""RAGAS metric stubs per task 19 G-P0-2 (real RAGAS deferred to v2).
+"""RAGAS 指标的纯函数 stub 版本 (无 LLM judge、无重依赖)。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` task 19:
-
-> Real RAGAS `faithfulness` with custom LLM judge (task 19 ships a stub
-> for v2; see G-P0-2)
-
-This module ships pure-function STUBS that approximate RAGAS metrics
-without the LLM judge or heavy RAGAS dependency. Replace with real
-RAGAS in v2 once the dep is added (currently ``ragas>=0.3,<0.4`` is
-in pyproject but heavy).
-
-Stub implementations:
-
-- ``faithfulness_stub(answer, contexts) -> float`` (0-1, higher = less hallucination)
-  Tokenize answer into word claims; each claim token-set must be a
-  subset of the union of all context token-sets. Fraction of in-context
-  claims = faithfulness. Heuristic, NOT a real hallucination detector.
-
-- ``answer_relevance_stub(query, answer) -> float`` (0-1, higher = more on-topic)
-  Jaccard similarity between query tokens and answer tokens.
-  Heuristic, NOT a true semantic relevance.
-
-- ``context_precision_stub(retrieved_chunk_ids, ground_truth_chunk_ids) -> float``
-  Fraction of retrieved chunks that are in ground truth (precision-like).
-  Same as ``precision_at_k`` from ``rag.eval.metrics`` but exposed here
-  under the RAGAS metric name for API symmetry.
-
-Real RAGAS interface (v2 replacement, NOT shipped):
-- ``from ragas.metrics import faithfulness, answer_relevancy, context_precision``
-- ``from ragas import evaluate``
-- Uses LLM-as-judge for faithfulness (e.g. GPT-4 scores 1-5, normalized).
+提供 ``faithfulness_stub``、``answer_relevance_stub``、``context_precision_stub``。
+这些是启发式实现, 非真实幻觉检测 / 语义相关性, 用于在 v2 引入真实
+RAGAS 之前先跑通评估流程。
 """
 
 from __future__ import annotations
@@ -37,52 +10,39 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# ---------- Tokenization ----------
+# ---------- 分词 ----------
 
 
 _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
-# CJK Unified Ideographs + Extension A: tokenize each character individually
-# so "教程很好" → {"教", "程", "很", "好"} (matches RAGAS's per-character
-# Chinese tokenization default).
+# CJK 表意文字 + 扩展 A 区: 逐字分词, 使 ``教程很好`` 切分为
+# ``{"教", "程", "很", "好"}`` (对齐 RAGAS 的逐字中文分词默认)。
 _CJK_CHAR_RE = re.compile(r"[一-鿿㐀-䶿]")
-# Match runs that contain at least one CJK character (used to filter out
-# the combined-CJK-run that ``\w+`` would otherwise produce, since it
-# mismatches against per-character contexts).
+# 匹配包含至少一个 CJK 字符的整段, 用于过滤掉 ``\w+`` 切出的
+# 整段 CJK, 避免与逐字上下文产生子集判断偏差。
 _CJK_RUN_RE = re.compile(r"[\w]*[一-鿿ꀀ-꓏][\w]*", re.UNICODE)
 
 
 def _tokenize(text: str) -> set[str]:
-    """Lowercase word tokens + per-character CJK tokens.
+    """返回小写词级 tokens 与逐字 CJK tokens 的并集。
 
-    For ASCII/Latin: ``\\w+`` matches whole words.
-    For CJK (Chinese/Japanese kanji/Korean hanja): each character is its
-    own token, matching RAGAS-style per-character tokenization.
-
-    Pure-CJK runs from ``\\w+`` are dropped to avoid subset mismatch
-    (e.g. claim "教程" would not be subset of context tokenized into
-    individual chars).
-
-    This makes ``教程很好`` tokenize as ``{"教", "程", "很", "好"}`` so
-    subset presence checks behave intuitively.
+    - 拉丁词: 整词 token。
+    - CJK 字符: 逐字 token。
+    - 纯 CJK 整段从 ``\\w+`` 结果中剔除, 避免子集判断误判。
     """
     if not text:
         return set()
     out: set[str] = set()
-    # Latin/word tokens: skip runs that are entirely CJK
+    # 拉丁/词级 tokens, 跳过整段为 CJK 的 run
     for m in _TOKEN_RE.finditer(text):
         if not _CJK_RUN_RE.fullmatch(m.group(0)):
             out.add(m.group(0).lower())
-    # Per-character CJK tokens
+    # 逐字 CJK tokens
     out.update(_CJK_CHAR_RE.findall(text))
     return out
 
 
 def _split_into_claims(answer: str) -> list[set[str]]:
-    """Split answer into claim-like chunks (sentences/segments) for faithfulness.
-
-    Heuristic: split on sentence-ending punctuation (. ! ? 。 ！ ？ \n).
-    Returns a list of token-sets; each = one claim's tokens.
-    """
+    """将 answer 拆分为 claim 片段 (按句末标点)。返回各 claim 的 token 集。"""
     if not answer:
         return []
     raw = re.split(r"[.!?。！？\n]+", answer)
@@ -93,17 +53,11 @@ def _split_into_claims(answer: str) -> list[set[str]]:
 
 
 def faithfulness_stub(answer: str, contexts: Iterable[str]) -> float:
-    """Faithfulness stub: fraction of answer claims whose tokens are in context.
+    """faithfulness stub: answer 中能被 context 覆盖的 claim 比例。
 
-    Returns ``|claims_in_context| / |claims|``. Range [0, 1].
+    返回 ``|claims_in_context| / |claims|``, 范围 ``[0, 1]``。
 
-    Edge cases:
-    - empty answer → 1.0 (no claims to verify)
-    - empty contexts → 0.0 (no evidence)
-    - single-token answer → checks token presence
-
-    Heuristic, NOT a real hallucination detector. Real RAGAS uses an
-    LLM judge to verify each claim against the context.
+    启发式实现, 非真实幻觉检测; 真实 RAGAS 使用 LLM judge。
     """
     claims = _split_into_claims(answer)
     if not claims:
@@ -123,16 +77,11 @@ def faithfulness_stub(answer: str, contexts: Iterable[str]) -> float:
 
 
 def answer_relevance_stub(query: str, answer: str) -> float:
-    """Answer relevance stub: Jaccard similarity between query and answer tokens.
+    """answer relevance stub: query 与 answer tokens 的 Jaccard 相似度。
 
-    Returns ``|q ∩ a| / |q ∪ a|``. Range [0, 1].
+    返回 ``|q ∩ a| / |q ∪ a|``, 范围 ``[0, 1]``。
 
-    Edge cases:
-    - empty query or empty answer → 0.0
-    - both empty → 0.0
-
-    Heuristic, NOT a true semantic relevance. Real RAGAS computes cosine
-    similarity between query and answer embeddings.
+    启发式实现; 真实 RAGAS 使用 query / answer embedding 的余弦相似度。
     """
     q = _tokenize(query)
     a = _tokenize(answer)
@@ -148,16 +97,9 @@ def context_precision_stub(
     retrieved_chunk_ids: list[str],
     ground_truth_chunk_ids: list[str] | set[str],
 ) -> float:
-    """Context precision stub: fraction of retrieved chunks that are in ground truth.
+    """context precision stub: retrieved 中属于 ground truth 的比例。
 
-    Returns ``|retrieved ∩ gt| / |retrieved|``. Range [0, 1].
-
-    Edge cases:
-    - empty retrieved → 1.0 (nothing to evaluate, vacuous)
-    - empty ground_truth → 0.0 (no relevant signal in retrieval)
-
-    Real RAGAS context precision uses a more nuanced formula that
-    considers the order of retrieved chunks.
+    返回 ``|retrieved ∩ gt| / |retrieved|``, 范围 ``[0, 1]``。
     """
     if not retrieved_chunk_ids:
         return 1.0
@@ -168,6 +110,4 @@ def context_precision_stub(
     return hits / len(retrieved_chunk_ids)
 
 
-# ---------- Aggregations (re-export for symmetry with metrics.py) ----------
-
-
+# ---------- 聚合 (与 metrics.py 对称地再导出) ----------

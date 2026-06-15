@@ -9,6 +9,8 @@ from rag.infra.pg.base import Base, SoftDeleteMixin, TimestampMixin
 
 
 class ChunkModel(Base, TimestampMixin, SoftDeleteMixin):
+    """``chunks`` 表的 ORM 模型。"""
+
     __tablename__ = "chunks"
     __table_args__ = (
         CheckConstraint("modality IN ('text', 'image_caption')", name="modality_chk"),

@@ -30,8 +30,13 @@ async def _create_client(url: str) -> aioredis.Redis:
 
 class Cache:
     def __init__(self, url: str | None = None) -> None:
+        """初始化缓存实例。
+
+        Args:
+            url: Redis 连接 URL；为 None 时从 `settings.redis_url` 读取。
+        """
         self.url = url or str(settings.redis_url)
-        # client 在 ``init_cache()`` 阶段创建, 不在 import 时同步连接, 避免
+        # client 在 `init_cache()` 阶段创建, 不在 import 时同步连接, 避免
         # 进程启动期阻塞 / 端口未就绪时抛错。
         self._client: aioredis.Redis | None = None
         self.metrics: dict[str, dict[str, int]] = {
@@ -42,7 +47,7 @@ class Cache:
         }
 
     async def connect(self) -> None:
-        """`close()` 之后重建 client；与 PG `init_pool()` 对称，正常 import 后无需调用。"""
+        """`close()` 之后重建 client；正常 import 流程无需显式调用。"""
         if self._client is None:
             self._client = await _create_client(self.url)
 
@@ -97,6 +102,16 @@ class Cache:
         layer: str = "L1",
         warnings: list[str] | None = None,
     ) -> str | None:
+        """按 `key` 读取字符串值并更新命中指标。
+
+        Args:
+            key: Redis key。
+            layer: 缓存层 (L1-L4), 仅用于指标统计与 TTL 校验。
+            warnings: 若提供, Redis 不可用时追加降级原因。
+
+        Returns:
+            取到的字符串；不存在或 Redis 不可用时返回 None。
+        """
         # layer 须对应 settings.cache 中的 TTL 配置；过期由 Redis 在 set(ex=...) 时写入
         self._ttl_for_layer(layer)
         try:
@@ -123,6 +138,18 @@ class Cache:
         layer: str = "L1",
         warnings: list[str] | None = None,
     ) -> bool:
+        """序列化 `value` 并写入 Redis。
+
+        Args:
+            key: Redis key。
+            value: 待写入值, 支持 `BaseModel` / `str` / 其他 JSON 可序列化对象。
+            ex: 显式 TTL 秒数；为 None 时使用 layer 默认 TTL。
+            layer: 缓存层 (L1-L4)。
+            warnings: 若提供, Redis 不可用时追加降级原因。
+
+        Returns:
+            写入成功返回 True, Redis 不可用返回 False。
+        """
         self._ttl_for_layer(layer)
         try:
             if isinstance(value, BaseModel):
@@ -143,6 +170,15 @@ class Cache:
         pattern: str,
         warnings: list[str] | None = None,
     ) -> int:
+        """使用 `scan_iter` 分批删除匹配 `pattern` 的 keys。
+
+        Args:
+            pattern: Redis `SCAN` MATCH 模式, 支持通配符。
+            warnings: 若提供, Redis 不可用时追加降级原因。
+
+        Returns:
+            实际删除的 key 数量；Redis 不可用时返回 0。
+        """
         try:
             count = 0
             async for key in self.client.scan_iter(match=pattern, count=100):
@@ -164,11 +200,11 @@ cache = Cache()
 
 
 async def init_cache() -> None:
-    """验证 Redis 连通性。client 在 init 阶段创建, 与 PG `init_pool()` 对称。"""
+    """创建 Redis client 并 `ping` 验证连通性。"""
     await cache.connect()
     await cache.client.ping()
 
 
 async def close_cache() -> None:
-    """长时间运行的脚本/任务结束时释放连接池，与 PG `close_pool()` 对称。"""
+    """关闭 client, 释放连接池。"""
     await cache.close()

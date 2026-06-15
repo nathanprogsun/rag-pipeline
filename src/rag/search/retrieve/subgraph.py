@@ -1,19 +1,7 @@
-"""Per-dataset retrieval subgraph (intra-fusion per Contract 1).
+"""per-dataset 检索子图: 验证 → 并行向量/全文召回 → intra-fusion 融合。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 8 stage
-ordering: subgraph runs in parallel per-dataset, then orchestrator does
-inter-fusion + filter + cite + generate.
-
-Per-dataset flow:
-1. Validate request (query non-empty, top_k positive, dataset_id is UUID)
-2. Vector recall (async) — via ``VectorRetriever``
-3. Fulltext recall (async) — via ``FulltextRetriever``
-4. Intra-fuse with weights ``[vector_weight, fulltext_weight]`` (Contract 1)
-
-Returns ``list[ScoredDocument]`` for the single dataset.
-
-Reuses existing ``VectorRetriever`` / ``FulltextRetriever`` from
-``rag.infra.pg`` (both are LangChain ``Runnable``). No new DB code.
+复用 ``rag.infra.pg`` 中的 ``VectorRetriever`` / ``FulltextRetriever``
+(均为 LangChain ``Runnable``), 不引入新 DB 代码。
 """
 
 from __future__ import annotations
@@ -40,10 +28,9 @@ def validate_subgraph_request(
     dataset_id: uuid.UUID,
     top_k: int,
 ) -> None:
-    """Validate per-dataset subgraph request. Raises on invalid input.
+    """校验 per-dataset subgraph 请求, 无效时抛出 ``SearchRequestValidationError``。
 
-    Per FastGPT subgraph design (task 14): each subgraph is responsible
-    for its own input validation before kicking off retrieval.
+    每个 subgraph 在启动检索前自行校验输入。
     """
     if not isinstance(query, str) or not query.strip():
         msg = f"query must be a non-empty string, got {type(query).__name__}"
@@ -57,18 +44,16 @@ def validate_subgraph_request(
 
 
 class SearchSubgraph:
-    """Per-dataset retrieval subgraph (intra-fusion per Contract 1).
+    """per-dataset 检索子图 (intra-fusion 融合)。
 
     Args:
-        dataset_id: UUID of the dataset to search.
-        vector_retriever: LangChain Runnable for vector recall (e.g.
-            ``rag.infra.pg.vector_store.VectorRetriever``).
-        fulltext_retriever: LangChain Runnable for fulltext recall (e.g.
-            ``rag.infra.pg.fulltext_store.FulltextRetriever``).
-        rrf_k: RRF k constant (default 60, Cormack 2009).
-        vector_weight: Weight for vector result list (default 0.7).
-        fulltext_weight: Weight for fulltext result list (default 0.3).
-        top_k: Top-k per source (default 10).
+        dataset_id: 待搜索 dataset 的 UUID。
+        vector_retriever: 向量检索 LangChain Runnable。
+        fulltext_retriever: 全文检索 LangChain Runnable。
+        rrf_k: RRF k 常数, 默认 60。
+        vector_weight: 向量结果权重, 默认 0.7。
+        fulltext_weight: 全文结果权重, 默认 0.3。
+        top_k: 单源 top-k, 默认 10。
     """
 
     DEFAULT_TOP_K: int = 10
@@ -101,7 +86,7 @@ class SearchSubgraph:
         self.top_k = top_k
 
     async def ainvoke(self, query: str) -> list[ScoredDocument]:
-        """Per-dataset retrieval: validate → parallel vector+fulltext → intra-fuse."""
+        """per-dataset 检索: 校验 → 并行向量+全文 → intra-fuse 融合。"""
         validate_subgraph_request(
             query=query, dataset_id=self.dataset_id, top_k=self.top_k
         )
@@ -120,7 +105,7 @@ class SearchSubgraph:
     async def _safe_retrieve(
         self, retriever: Runnable, query: str
     ) -> list[ScoredDocument]:
-        """Call retriever.ainvoke with safe error handling."""
+        """调用 ``retriever.ainvoke`` 并做安全错误处理。"""
         try:
             result = await retriever.ainvoke({"query": query, "top_k": self.top_k})
         except Exception as e:

@@ -1,4 +1,4 @@
-"""rag.eval — retrieval quality evaluation framework (5h)."""
+"""rag.eval — 检索质量评估框架。"""
 
 from rag.eval.metrics import (
     aggregate_metric,

@@ -47,13 +47,16 @@ class HistoryConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     chat_bg: str = ""  # 多轮对话背景
-    histories: list[dict[str, str]] = []  # 对话历史 [{"role":"user","content":"..."}]
+    histories: list[
+        dict[str, str]
+    ] = []  # 对话历史, 形如 `[{"role":"user","content":"..."}]`
 
 
 class SearchRequest(BaseModel):
-    """用户搜索请求: 必填 query + 4 个子 config + 顶层标志位。
+    """用户搜索请求: 必填 `query` + 4 个子 config + 顶层标志位。
 
-    子 config 按职责拆分, 顶层只留 query / dataset_ids / image_urls / audit / use_global_rerank。
+    子 config 按职责拆分, 顶层只留 `query` / `dataset_ids` / `image_urls`
+    / `audit` / `use_global_rerank`。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -73,12 +76,11 @@ class SearchRequest(BaseModel):
 class Citation(BaseModel):
     """返回给前端的引用条目 DTO。
 
-    Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 5:
-    - ``position`` (1-based char offset of first ``[id](CITE)`` marker in
-      ``response``) 由 ``rag.infra.text.citation_check.resolve_citation_positions``
-      在 generation 之后填入; 1-based 与 ``SearchResult.citations`` 的
-      index 对齐 (``citations[0].position`` 对应 ``[1](CITE)``)。
-    - 不可解析到 marker 的 citation (response 中未引用) ``position=None``。
+    - `position`: `response` 中首个 `[id](CITE)` 标记的 1-based 字符偏移,
+      由 `rag.infra.text.citation_check.resolve_citation_positions` 在
+      generation 之后填入; 1-based 与 `SearchResult.citations` 的下标对齐
+      (`citations[0].position` 对应 `[1](CITE)`)。
+    - 不可解析到 marker 的引用 (response 中未引用) `position=None`。
     """
 
     chunk_id: uuid.UUID
@@ -94,13 +96,12 @@ class Citation(BaseModel):
 class SearchResult(BaseModel):
     """Search 接口完整响应。
 
-    Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 4-6:
-    - ``response``: LLM 的 *生成* 答案 (不是 prompt), RAGAS faithfulness 读这个。
-                  可包含 ``[id](CITE)`` 内联引用标记 (见 Contract 5)。
-    - ``citations``: 与 ``response`` 中 ``[id]`` 一一对应的引用列表,1-based index。
-    - ``citation_format``: 渲染方式选择, ``"inline"`` (FastGPT 风格) 或 ``"prefix"`` (旧版块状)。
-    - ``_intermediate_hits``: 召回 + 融合 + rerank 中间产物, 给 audit_tap / EvalRunner 用,
-                              ``exclude=True`` 不出现在 ``model_dump_json()`` 输出里 (见 Contract 6)。
+    - `response`: LLM 的生成答案 (不是 prompt), RAGAS faithfulness 读这个。
+      可包含 `[id](CITE)` 内联引用标记。
+    - `citations`: 与 `response` 中 `[id]` 一一对应的引用列表, 1-based index。
+    - `citation_format`: 渲染方式选择, `inline` (内联) 或 `prefix` (旧版块状)。
+    - `_intermediate_hits`: 召回 + 融合 + rerank 中间产物, 给 audit_tap / EvalRunner
+      用, `exclude=True` 不出现在 `model_dump_json()` 输出里。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -110,8 +111,8 @@ class SearchResult(BaseModel):
     citation_format: Literal["inline", "prefix"] = "inline"
     failed_dataset_ids: list[uuid.UUID] = []
     warnings: list[str] = []
-    # PrivateAttr (Pydantic v2 idiomatic private state) — excluded from
-    # .model_dump() / .model_dump_json() output. 详见 Contract 6。
+    # `PrivateAttr` (Pydantic v2 idiomatic 私有状态), 不出现在
+    # `.model_dump()` / `.model_dump_json()` 输出里。
     _intermediate_hits: list[ScoredDocument] = PrivateAttr(default_factory=list)
 
 
@@ -120,7 +121,15 @@ class RerankModelSource(Protocol):
 
 
 def resolve_rerank_model(req: SearchRequest, dataset: RerankModelSource) -> str | None:
-    """解析 rerank 模型优先级: req.retrieval.rerank_model > dataset.rerank_model > None。"""
+    """解析 rerank 模型优先级: `req.retrieval.rerank_model` > `dataset.rerank_model` > `None`。
+
+    Args:
+        req: 用户搜索请求。
+        dataset: 提供 `rerank_model` 字段的 dataset 视图。
+
+    Returns:
+        最终选用的 rerank 模型名, 若 `use_rerank=False` 或两者都未配置则返回 `None`。
+    """
     if not req.retrieval.use_rerank:
         return None
     return req.retrieval.rerank_model or dataset.rerank_model

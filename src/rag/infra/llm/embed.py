@@ -1,3 +1,5 @@
+"""Embedding 模型工厂与重试封装。"""
+
 import asyncio
 
 import httpx
@@ -21,8 +23,8 @@ from rag.config import settings
 #  - RateLimitError: 429 / TPM 限流。
 #  - httpx.HTTPError: 兜底, 防 openai SDK 漏包 (e.g. 旧版本或某些 transport
 #    异常未被包装)。
-#  - asyncio.TimeoutError: Python 3.11+ ``asyncio.wait_for`` 超时抛裸
-#    ``TimeoutError`` (即 ``asyncio.TimeoutError``), openai 不会包装,
+#  - asyncio.TimeoutError: Python 3.11+ `asyncio.wait_for` 超时抛裸
+#    `TimeoutError` (即 `asyncio.TimeoutError`), openai 不会包装,
 #    必须显式捕获, 否则会逃出 retry 边界。
 _RETRIABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     APIError,  # 父类: 覆盖 APIConnectionError 等
@@ -34,7 +36,7 @@ _RETRIABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 
 
 class _RetryableEmbeddings(OpenAIEmbeddings):
-    """LangChain OpenAIEmbeddings 之上叠加 tenacity 重试。"""
+    """在 `OpenAIEmbeddings` 之上叠加 tenacity 重试。"""
 
     @retry(
         retry=retry_if_exception_type(_RETRIABLE_EXCEPTIONS),
@@ -48,6 +50,7 @@ class _RetryableEmbeddings(OpenAIEmbeddings):
         chunk_size: int | None = None,
         **kwargs: object,
     ) -> list[list[float]]:
+        """批量 embedding, 失败按 `_RETRIABLE_EXCEPTIONS` 重试。"""
         return await super().aembed_documents(texts, chunk_size=chunk_size, **kwargs)
 
     @retry(
@@ -57,11 +60,19 @@ class _RetryableEmbeddings(OpenAIEmbeddings):
         reraise=True,
     )
     async def aembed_query(self, text: str, **kwargs: object) -> list[float]:
+        """单条 query embedding, 失败按 `_RETRIABLE_EXCEPTIONS` 重试。"""
         return await super().aembed_query(text, **kwargs)
 
 
 def get_embed_model(model: str | None = None) -> OpenAIEmbeddings:
-    """获取 embed model。调用方通过 llm_sem.run(\"embedding\", ...) 进入限流。"""
+    """获取带重试的 embed model 实例。
+
+    Args:
+        model: 模型名, 为 None 时使用 `settings.openai_embedding_model`。
+
+    Returns:
+        配置好的 `OpenAIEmbeddings` (内部用 `_RetryableEmbeddings`)。
+    """
     return _RetryableEmbeddings(
         model=model or settings.openai_embedding_model,
         openai_api_key=settings.openai_embedding_api_key,

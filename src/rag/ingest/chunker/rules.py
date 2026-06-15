@@ -1,21 +1,4 @@
-"""Chunker 分隔符 Rule 元数据表 (从 17 级收敛到 ~10 级)。
-
-收敛策略 (业内常见做法):
-  - 5 个标题级 H1-H5 保留 (默认 paragraph_chunk_deep=5)
-  - 5 个标点规则合并为 1 个 (punct_merged), overlap 行为统一
-  - 保留 HTML <table> rule (split_around, 注释 "HTML Table tag 尽可能保障完整")
-  - 自定义 separator 走 _split_custom 旁路, 不进 build_steps 内部
-
-固定 11 级 (按优先级粗到细):
-  step 0:  CUSTOM_SPLIT_SIGN (默认占位)
-  step 1-5: H1 / H2 / H3 / H4 / H5 (forbid_overlap=True)
-  step 6:  code_block ```/~~~ (split_around=True, forbid_overlap=True)
-  step 7:  html_table <table>...</table> (split_around=True, forbid_overlap=True)
-  step 8:  md_table (split_around=True, forbid_overlap=True)
-  step 9:  \\n\\n (段落, forbid_overlap=True)
-  step 10: \\n   (单换行, forbid_overlap=True)
-  step 11: punct_merged (中英标点合并, 允许 overlap)
-"""
+"""Chunker 分隔符 Rule 元数据表: 按粗到细排序的固定 ~12 级, 标题/代码块/表格/换行/标点逐级收敛。"""
 
 from __future__ import annotations
 
@@ -34,7 +17,7 @@ class Rule:
 
 
 def _heading_rules(chunk_size: int, deep: int) -> list[Rule]:
-    """H1-H5 标题级。deep 上限 5 (业内常见默认值)。"""
+    """生成 H1 到 H(deep) 的标题级 Rule。deep 上限截断为 5, 避免标题级过深导致规则冗余。"""
     max_deep = min(deep, 5)
     return [
         Rule(
@@ -56,11 +39,7 @@ def _code_block_rule(code_block_max_len: int) -> Rule:
 
 
 def _html_table_rule(chunk_size: int) -> Rule:
-    """HTML <table>...</table> 块, split_around 保留整块不被切碎。
-
-    业内常见做法: 注释 "HTML Table tag 尽可能保障完整"。
-    使用非贪婪 + DOTALL 匹配嵌套表格, 但容许任意属性/嵌套标签。
-    """
+    """HTML `<table>...</table>` 块 Rule。使用非贪婪 + DOTALL 匹配, 容许任意属性/嵌套标签, ``split_around=True`` 保留整块不被切碎。"""
     return Rule(
         reg=r"(<table\b[\s\S]*?</table>)",
         max_len=chunk_size,
@@ -86,15 +65,11 @@ def _newline_rules(chunk_size: int) -> list[Rule]:
 
 
 def _punct_merged_rule(chunk_size: int) -> Rule:
-    """5 种标点合并为 1 条: 中: 。！？；, + 英: ! ? ; , (后接空格)。
-
-    合并理由: overlap ratio >= 0.15 时, overlap 会跨过细粒度标点,
-    实战中合并不损失语义, 但 chunk 数更稳定。
-    """
+    """中英细粒度标点合并 Rule: 中文 ``。！？；,`` + 英文 ``! ? ; ,`` (后接空格)。合并后 ``forbid_overlap=False``, 是唯一允许 overlap 的级别。"""
     return Rule(
         reg=r"([。！？；，]|[!?;,] )",
         max_len=chunk_size,
-        forbid_overlap=False,  # 唯一允许 overlap 的级
+        forbid_overlap=False,  # 唯一允许 overlap 的级别
     )
 
 
@@ -104,13 +79,16 @@ def build_steps(
     paragraph_chunk_deep: int = 5,
     custom_reg: list[str] | None = None,
 ) -> list[Rule]:
-    """构造 Rule 列表。
+    """构造按优先级排序的 Rule 列表。
 
     Args:
-        custom_reg: 向后兼容参数, 旧 API 传入后作为前 N 条 custom rules 插入。
+        chunk_size: 常规 chunk 长度上限。
+        max_size: 硬上限 (用于代码块与 custom rule)。
+        paragraph_chunk_deep: 标题级深度, 默认 5。
+        custom_reg: 自定义分隔符正则列表, 作为前 N 条 custom rule 插入; 传入空/None 时仅追加默认占位。
 
     Returns:
-        list[Rule] 长度 = 12 (无 custom_reg) + len(custom_reg)
+        ``list[Rule]`` 长度 = 12 (无 custom_reg) + ``len(custom_reg)``。
     """
     code_block_max_len = min(max_size, chunk_size * 4)
 
@@ -132,7 +110,7 @@ def build_steps(
 
 
 def default_steps(chunk_size: int, max_size: int) -> list[Rule]:
-    """无 custom_reg 的默认 STEPS。"""
+    """``paragraph_chunk_deep=5`` 的默认 STEPS 列表。"""
     return build_steps(chunk_size, max_size, paragraph_chunk_deep=5)
 
 

@@ -1,20 +1,4 @@
-"""IngestPipeline: 单一 ``ingest(IngestSource) -> IngestResult`` 入口。
-
-设计要点:
-- 删除 ``_ensure_structure`` 兜底 + ``_TEXT_STRUCTURE_EXTRACTORS`` 表
-  (旧 MarkdownStructureExtractor / HtmlStructureExtractor 已删除)。
-- 文档级结构不再由 reader / pipeline 抽取, 改由 chunker 内部 per-chunk
-  regex (_MD_HEADING_RE / _HTML_HEADING_RE / _TABLE_RE / _CODE_FENCE_RE)
-  现场重算 heading_stack / has_code / has_table / image_refs。
-- doc-level identifier 推导:
-    * title: 优先 text 内第一行非空 `#` / `<h1>` 标题, 兜底 ``meta.filename``
-    * page_count / paragraph_count: 从 ``meta`` 透传
-    * warnings: 收集非致命降级信号
-- FileSource 路径走 ``await dispatch_bytes`` 直接, 不再调 ``read_file`` 包装
-  (避免 ``asyncio.run`` 嵌套导致 ``RuntimeError``)。
-- ``ingest`` 新增 ``get_format_text: bool = True``: 透传给 chunker, 决定
-  ``Chunk.text`` 是 ``format_text`` (csv/xlsx 的 md table) 还是 ``raw_text``。
-"""
+"""IngestPipeline: 单一 ``ingest(IngestSource) -> IngestResult`` 入口。"""
 
 from __future__ import annotations
 
@@ -38,13 +22,12 @@ from rag.ingest.types import Chunk, DocMeta, IngestResult, TextDoc
 logger = logging.getLogger(__name__)
 
 # doc-level title 抽取: 优先 Markdown `# title` 或 HTML `<h1>title</h1>` 第一项。
-# 静态 structure 已删除, 这里从原始文本里走一次轻量 regex 推导即可, 不需要 Heading 树。
 _TITLE_MD_RE = re.compile(r"^#{1,5}\s+(.+)$", re.MULTILINE)
 _TITLE_HTML_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
 
 
 def _extract_title(text: str) -> str | None:
-    """从纯文本中抽第一行 # 标题或 <h1>, 失败返回 None。"""
+    """从纯文本中抽第一行 `#` 标题或 `<h1>`, 失败返回 None。"""
     m = _TITLE_MD_RE.search(text)
     if m:
         title = m.group(1).strip()
@@ -59,7 +42,7 @@ def _extract_title(text: str) -> str | None:
 
 
 def _derive_title(text_doc: TextDoc, warnings: list[str]) -> str | None:
-    """doc-level title 推导: 文本内 # / <h1> 第一项, 兜底 filename。"""
+    """doc-level title 推导: 文本内 `#` / `<h1>` 第一项, 兜底 filename。"""
     title = _extract_title(text_doc.text)
     if title:
         return title
@@ -70,7 +53,7 @@ def _derive_title(text_doc: TextDoc, warnings: list[str]) -> str | None:
 
 
 def _build_context(text_doc: TextDoc) -> ChunkContext:
-    """组装 Chunker 入参上下文: 仅 DocMeta (structure / heading_path 已删)。"""
+    """组装 Chunker 入参上下文。"""
     return ChunkContext.from_meta(meta=text_doc.meta)
 
 
@@ -88,7 +71,6 @@ class IngestPipeline:
         self._max_url_size = max_url_size
         self._url_timeout_s = url_timeout_s
 
-    # ── 单一入口 ─────────────────────────────────────────────
     async def ingest(
         self,
         source: IngestSource,
@@ -105,10 +87,8 @@ class IngestPipeline:
         Returns:
             ``IngestResult(chunks=..., title=..., doc_meta=..., warnings=...)``
 
-        Note:
-            CLI 入口负责 ``asyncio.run(pipeline.ingest(...))`` 并统一加 tqdm / logger。
-            FileSource 不再调 ``read_file`` (那里 ``asyncio.run`` 会与外层 loop 冲突),
-            直接走 ``await dispatch_bytes``。
+        Raises:
+            TypeError: ``source`` 不是三种合法子类之一。
         """
         if isinstance(source, FileSource):
             text_doc = await self._read_file(source)
@@ -123,8 +103,7 @@ class IngestPipeline:
             if "." not in filename:
                 filename = f"{filename}.{source.file_type.lstrip('.')}"
             # BufferSource 视为"已在内存中的文件流", datasource 归 file;
-            # 落库时由 ingest_to_stored_datasource 依据 source 前缀
-            # (manual:// / inline://) 决定是否改判为 manual。
+            # 落库时再依据 source 前缀改判为 manual。
             text_doc = await dispatch_bytes(
                 buffer=source.buf,
                 extension=source.file_type,
@@ -140,8 +119,8 @@ class IngestPipeline:
     async def _read_file(self, source: FileSource) -> TextDoc:
         """FileSource -> TextDoc: 直接走 ``await dispatch_bytes``。
 
-        不用 ``read_file`` 因为后者用 ``asyncio.run`` 包, 在 ``pipeline.ingest``
-        已处于 event loop 时会 ``RuntimeError``。
+        不用 ``read_file`` 是因为后者用 ``asyncio.run`` 包, 在已处于 event loop
+        时会抛 ``RuntimeError``。
         """
         p = source.path
         if not p.exists():
@@ -174,22 +153,17 @@ class IngestPipeline:
             filename=p.name,
         )
 
-    # ── 内部统一: 两段串联 ─────────────────────────────────────
     async def _process(
         self, text_doc: TextDoc, *, get_format_text: bool = True
     ) -> IngestResult:
-        # normalize 已 async, 直接 ``await`` 透传; chunker.split
-        # 仍为 sync (无 I/O), 不阻塞 event loop。整条 ingest 主干全栈 async。
         warnings: list[str] = []
 
         # 先在 normalize 之前抽 title, 防 normalizer 改写 / 删除原 H1。
         pre_normalize_title = _derive_title(text_doc, warnings)
 
-        # Step 1: Normalizer (可选, 内部失败降级)
         text_doc = await self.normalizer.normalize(text_doc)
         text = text_doc.text
 
-        # Step 2: Chunker (注入 ctx 含 DocMeta)
         ctx = _build_context(text_doc)
         chunks: list[Chunk] = self.chunker.split(
             text,

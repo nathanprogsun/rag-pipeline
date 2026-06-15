@@ -1,22 +1,10 @@
-"""ParentDoc stage 8 per Contract 8.
+"""ParentDoc 阶段: 将命中 chunk 扩展到父窗口。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 8:
-
-  8. ParentDoc Expand (parent_doc.py)
-
-For each matched chunk, expand to its parent window:
-``[chunk_index - window_size, chunk_index + window_size]`` via
-``ChunkRepository.get_siblings(dataset_id, parent_title, lo, hi)``.
-
-The matched chunk keeps its original score (it's the actual match).
-Siblings get a decayed score (default ``score * 0.5``) so they rank
-below the actual match but still above unrelated chunks.
-
-Image_caption modality hits bypass parent_doc expansion (their parent
-context is the image itself, not text siblings).
-
-This stage reads ``req.context.parent_doc_window`` (default 0 = disabled)
-from ``SearchRequest`` to decide window size at runtime.
+对每个命中 chunk, 扩展区间 ``[chunk_index - window_size, chunk_index + window_size]``,
+通过 ``ChunkRepository.get_siblings`` 取出兄弟 chunk。命中 chunk 保留原 score;
+兄弟 chunk score 按 ``sibling_decay`` (默认 0.5) 衰减。``image_caption`` 模态的命中
+跳过扩展 (其父上下文是图像本身)。窗口大小由 ``req.context.parent_doc_window``
+(默认 0 = 禁用) 决定。
 """
 
 from __future__ import annotations
@@ -34,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class ParentDocStage(Protocol):
-    """Stage 8 callback. Expands matched chunks to parent windows."""
+    """parent_doc 阶段回调, 将命中 chunk 扩展到父窗口。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -42,7 +30,7 @@ class ParentDocStage(Protocol):
 
 
 class NoOpParentDoc:
-    """Identity passthrough — used when parent_doc_window=0."""
+    """恒等透传, 用于 ``parent_doc_window=0`` 的情况。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -51,15 +39,22 @@ class NoOpParentDoc:
 
 
 class ParentDocExpander:
-    """Expand matched chunks to their parent window via ChunkRepository.
+    """通过 ``ChunkRepository`` 将命中 chunk 扩展到父窗口。
 
-    Per Contract 8 stage 8:
-      - For each matched chunk, fetch siblings in
-        ``[chunk_index - window_size, chunk_index + window_size]``.
-      - Matched chunk keeps original score.
-      - Siblings get score * ``decay`` (default 0.5).
-      - image_caption modality hits bypass expansion (return as-is).
-      - Dedup by chunk_id (overlapping windows share siblings).
+    - 命中 chunk 保留原 score。
+    - 兄弟 chunk score 乘以 ``sibling_decay`` (默认 0.5)。
+    - ``image_caption`` 模态的命中跳过扩展。
+    - 按 ``chunk_id`` 去重, 避免重叠窗口的兄弟重复。
+
+    Args:
+        chunk_repo: chunk 仓储, 用于查询兄弟 chunk。
+        default_window: 默认窗口大小, ``req.context.parent_doc_window``
+            为空时使用。
+        sibling_decay: 兄弟 chunk 分数衰减系数, 范围 ``[0, 1]``。
+        on_error: 扩展失败时的异步回调, 用于日志或告警。
+
+    Raises:
+        ValueError: ``default_window < 0`` 或 ``sibling_decay`` 越界。
     """
 
     DEFAULT_SIBLING_DECAY: float = 0.5
@@ -145,7 +140,7 @@ class ParentDocExpander:
 
 
 def _to_scored(chunk: DomainChunk, score: float) -> ScoredDocument:
-    """Convert ChunkRepository domain Chunk → ScoredDocument with given score."""
+    """将 ``ChunkRepository`` 的领域 ``Chunk`` 转换为带指定 score 的 ``ScoredDocument``。"""
     return ScoredDocument(
         chunk_id=chunk.id,
         dataset_id=chunk.dataset_id,

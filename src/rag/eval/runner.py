@@ -1,19 +1,8 @@
-"""EvalRunner — load (query, ground_truth) JSONL, run pipeline, compute metrics.
+"""``EvalRunner``: 加载 (query, ground_truth) JSONL, 跑 pipeline 并计算指标。
 
-Per `.agents/design/2026-06-14-rag-pipeline-delivery.md` task 18:
-
-JSONL schema (one record per line):
-    {
-      "query": "Python 列表推导式",
-      "dataset_ids": ["uuid1", "uuid2"],
-      "ground_truth_chunk_ids": ["uuid3", "uuid4"],
-      "k": 10,
-      "metadata": {...}  # optional, for downstream analysis
-    }
-
-EvalRunner reads JSONL, calls pipeline.ainvoke for each, extracts
-``chunk_ids`` from ``_intermediate_hits``, computes per-query metrics,
-aggregates. Results dumped as JSON.
+JSONL 每行一条记录, 含 query、dataset_ids、ground_truth_chunk_ids、k、
+可选 metadata。运行器对每条记录调用 ``pipeline.ainvoke``, 从
+``_intermediate_hits`` 抽取 ``chunk_ids``, 计算 per-query 指标并聚合。
 """
 
 from __future__ import annotations
@@ -46,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class EvalRecord(BaseModel):
-    """One entry in the eval JSONL dataset."""
+    """eval JSONL 数据集中的一条记录。"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -58,7 +47,7 @@ class EvalRecord(BaseModel):
 
 
 class EvalSampleResult(BaseModel):
-    """Per-query eval result."""
+    """per-query 评估结果。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -70,7 +59,7 @@ class EvalSampleResult(BaseModel):
 
 
 class EvalSummary(BaseModel):
-    """Aggregate result over the eval set."""
+    """跨 eval 集合的聚合结果。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -84,16 +73,15 @@ class EvalSummary(BaseModel):
 
 @dataclass
 class EvalRunner:
-    """Run pipeline against JSONL eval set, compute retrieval metrics.
+    """对 JSONL eval 集合跑 pipeline, 计算检索指标。
 
     Args:
-        pipeline: callable ``(SearchRequest) -> Awaitable[SearchResult]``
-            (typically ``build_search_pipeline(deps).ainvoke``).
-        metrics: list of metric "templates" to compute. Default: ``recall``,
-            ``precision``, ``hit_rate``, ``mrr``, ``ndcg`` (without ``@k``
-            suffix → k is filled in per-record).
-        default_k: default K for k-based metrics if not specified per record.
-        concurrency: max parallel pipeline.ainvoke calls.
+        pipeline: ``(SearchRequest) -> Awaitable[SearchResult]`` 可调用对象
+            (通常为 ``build_search_pipeline(deps).ainvoke``)。
+        metrics: 指标 "模板" 列表, 默认 ``recall``、``precision``、
+            ``hit_rate``、``mrr``、``ndcg`` (无 ``@k`` 后缀, k 由记录填充)。
+        default_k: 记录未指定时 k-based 指标的默认 k。
+        concurrency: 最大并行 ``pipeline.ainvoke`` 数。
     """
 
     pipeline: Callable[[SearchRequest], Awaitable[Any]]
@@ -115,12 +103,12 @@ class EvalRunner:
         *,
         output_path: Path | None = None,
     ) -> EvalSummary:
-        """Load JSONL, run pipeline per record, compute metrics, optionally write JSON.
+        """加载 JSONL, 跑 per-record pipeline, 计算指标, 可选写入 JSON。
 
-        Returns EvalSummary with per-metric aggregates (mean/std/min/max/median/count).
-        Metric names in aggregates use per-record k (e.g. ``recall@5`` if
-        record.k=5). This avoids cross-record aggregation across different
-        k values.
+        Returns:
+            ``EvalSummary`` 含 per-metric 聚合 (mean/std/min/max/median/count)。
+            聚合中的指标名带 per-record k (如 ``recall@5``), 避免跨不同
+            k 值聚合。
         """
         records = _load_jsonl(dataset_path)
         if not records:
@@ -128,7 +116,7 @@ class EvalRunner:
                 sample_count=0, metric_aggregates={}, warnings=["empty dataset"]
             )
 
-        # Concurrency-limited pipeline execution
+        # 并发受限的 pipeline 执行
         semaphore = asyncio.Semaphore(self.concurrency)
         results: list[EvalSampleResult] = []
         warnings: list[str] = []
@@ -145,7 +133,7 @@ class EvalRunner:
                         hit.chunk_id for hit in response._intermediate_hits
                     ]
                     k = record.k or self.default_k
-                    # Build per-record metric list using that record's k
+                    # 按当前记录的 k 拼出指标名
                     metric_names = [
                         f"{name}@{k}" if name != "mrr" else name
                         for name in self.metrics
@@ -172,8 +160,7 @@ class EvalRunner:
 
         await asyncio.gather(*(_run_one(r) for r in records))
 
-        # Aggregate per actual metric name (records may have different k,
-        # leading to different metric name keys)
+        # 按实际指标名聚合 (不同 k 对应不同指标名键)
         all_metric_names = sorted({name for r in results for name in r.metrics.keys()})
         aggregates: dict[str, dict[str, float]] = {}
         for metric_name in all_metric_names:
@@ -201,7 +188,7 @@ class EvalRunner:
 
 
 def _load_jsonl(path: Path) -> list[EvalRecord]:
-    """Load JSONL file, skipping malformed lines with warning."""
+    """加载 JSONL 文件, 跳过格式错误行并记录 warning。"""
     records: list[EvalRecord] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -222,7 +209,7 @@ def _compute_metrics(
     k: int,
     metrics: list[str],
 ) -> dict[str, float]:
-    """Compute requested metrics for a single query."""
+    """为单个 query 计算请求的指标。"""
     retrieved_str = [str(cid) for cid in retrieved_ids]
     gt_str = [str(cid) for cid in ground_truth_ids]
     out: dict[str, float] = {}

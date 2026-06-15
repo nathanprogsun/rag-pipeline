@@ -29,14 +29,17 @@ async def read_url(
     """URL -> TextDoc。
 
     Args:
-        url: 完整 http(s) URL
-        max_size: 字节上限, 超过抛 too_large
-        timeout_s: httpx 超时 (秒)
-        encoding: 文本类 adapter 的字符编码
+        url: 完整 http(s) URL。
+        max_size: 字节上限, 超过抛 too_large。
+        timeout_s: httpx 超时 (秒)。
+        encoding: 文本类 adapter 的字符编码。
+
+    Returns:
+        解析后的 TextDoc。
 
     Raises:
-        RAGError(code=reader.parse): httpx 失败 / 状态码非 2xx
-        RAGError(code=reader.too_large): content-length 超过 max_size
+        RAGError: ``code=reader.too_large`` — content-length 超过 max_size。
+        RAGError: ``code=reader.parse`` — httpx 失败或状态码非 2xx。
     """
     timeout = httpx.Timeout(connect=10.0, read=timeout_s, write=10.0, pool=10.0)
     logger.info("reader.url.start url=%s", url)

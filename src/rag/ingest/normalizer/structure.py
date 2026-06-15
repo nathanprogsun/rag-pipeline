@@ -1,10 +1,4 @@
-"""StructureNormalizer: 用 LLM 把非结构化文本重整为 markdown 章节。
-
-三道闸门设计 (业内常见做法):
-  1) mode == FORBID 或 chat_model is None → 跳过
-  2) mode == AUTO 且 markdown 标题数 >= 2 → 跳过
-  3) 调 LLM 改写,失败降级到 raw_text
-"""
+"""StructureNormalizer: 用 LLM 把非结构化文本重整为 markdown 章节。"""
 
 from __future__ import annotations
 
@@ -49,11 +43,12 @@ class StructuredText(BaseModel):
 class ResultDocument:
     """Normalize 内部结果, 供测试断言 + 未来审计。
 
-    Fields:
+    Args:
         result_text: 规范化后文本 (= raw_text 表示跳过或降级)
         raw_text: 原始输入
-        input_tokens / output_tokens: 粗略估计 (text_len // 4)
-        skipped: True ⇒ 命中闸门 1 或 2, 未调 LLM
+        input_tokens: 粗略估计 (text_len // 4)
+        output_tokens: 粗略估计 (text_len // 4)
+        skipped: True ⇒ 命中跳过条件, 未调 LLM
         degraded: True ⇒ 调了 LLM 但失败, 已降级回 raw_text
     """
 
@@ -118,7 +113,14 @@ _HUMAN_TEMPLATE = """请把下面的文本重整为 Markdown 章节。
 
 
 class StructureNormalizer(Normalizer):
-    """基于 LLM 的三道闸门结构化归一化器。"""
+    """基于 LLM 的三道闸门结构化归一化器。
+
+    Args:
+        chat_model: LLM 客户端 (Runnable); 为 None 时等价于 FORBID 模式。
+        mode: 三态开关 (FORBID / AUTO / FORCE)。
+        max_input_chars: 输入文本最大字符数, 超出截断。
+        llm_timeout_sec: LLM 调用超时秒数。
+    """
 
     def __init__(
         self,
@@ -153,7 +155,14 @@ class StructureNormalizer(Normalizer):
 
     # ── 测试入口: 暴露 ResultDocument (内部结果) ──────────────────────
     async def normalize_with_result(self, doc: TextDoc) -> ResultDocument:
-        """返回 ResultDocument, 仅供测试断言 skipped / degraded / tokens。"""
+        """返回 ResultDocument, 仅供测试断言 skipped / degraded / tokens。
+
+        Args:
+            doc: 输入文档。
+
+        Returns:
+            ResultDocument, 含跳过/降级/tokens 等内部结果。
+        """
         return await self._run_pipeline(doc.text)
 
     # ── 三道闸门主流程 ────────────────────────────────────────────────

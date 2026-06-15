@@ -1,25 +1,12 @@
-"""Multi-dataset retrieval+gen orchestrator per Contract 8.
+"""多 dataset 检索 + 生成编排器。
 
-Composes the 10 stages from `.agents/design/2026-06-14-cross-task-contracts.md`
-Contract 8:
+组合 query 改写、向量/全文召回、融合、重排、过滤、引用与生成等阶段。
 
-  1. query_ext (optional)                        — search.extension.query_ext
-  2. per-variant per-dataset subgraph retrieval — search.retrieve.subgraph
-  3. inter-variant intra_fusion                  — search.retrieve.fusion
-  4. rerank (optional)                           — search.retrieve.rerank
-  5. re-fuse (optional, baked into step 4)       — search.retrieve.rerank
-  6. inter-dataset fusion                        — implicit in step 2
-  7. filter (dedup + score + token budget)       — search.post.filter
-  8. parent_doc expand (optional)                — search.post.parent_doc
-  9. cite (optional)                             — search.post.cite
-  10. generation (optional)                      — search.generate.answer
-
-Public API:
+公共 API:
     SearchPipeline: ainvoke(SearchRequest) -> SearchResult
 
-Populates ``SearchResult._intermediate_hits`` (Contract 6: Field(exclude=True))
-for audit_tap / EvalRunner consumers; the field is excluded from
-``model_dump_json()`` output.
+填充 ``SearchResult._intermediate_hits`` (Pydantic 排除字段), 供
+``AuditTap`` 与 ``EvalRunner`` 使用, 但不出现在 ``model_dump_json()`` 输出中。
 """
 
 from __future__ import annotations
@@ -44,11 +31,11 @@ from rag.search.retrieve.subgraph import SearchSubgraph
 logger = logging.getLogger(__name__)
 
 
-# ---------- Optional stage callbacks ----------
+# ---------- 可选 stage 回调 ----------
 
 
 class RerankStage(Protocol):
-    """Optional stage 4+5: rerank + re-fuse."""
+    """可选 rerank + re-fuse 阶段回调。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -56,7 +43,7 @@ class RerankStage(Protocol):
 
 
 class ParentDocStage(Protocol):
-    """Optional stage 8: parent_doc window expansion."""
+    """可选 parent_doc 窗口扩展阶段回调。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -64,10 +51,10 @@ class ParentDocStage(Protocol):
 
 
 class CiteStage(Protocol):
-    """Optional stage 9: cite formatter.
+    """可选 cite 格式化阶段回调。
 
-    Receives final hits + SearchRequest, returns citations list (1-based
-    positions matching ``[id](CITE)`` markers in ``response``).
+    接收最终 hits 与 SearchRequest, 返回 1-based 编号的 citations 列表
+    (与 ``response`` 中的 ``[id](CITE)`` 标记对应)。
     """
 
     def __call__(
@@ -75,11 +62,10 @@ class CiteStage(Protocol):
     ) -> list[Citation]: ...
 
 
-# GenStage is defined in search.generate.answer (it lives with the LLM
-# gen implementation, which is its only concrete producer).
+# GenStage 在 search.generate.answer 中定义 (与 LLM gen 实现共同维护)。
 
 
-# Functional aliases for test ergonomics (callables also accepted)
+# 函数式别名 (callable 也可接受, 便于测试)
 RerankFn = Callable[
     [list[ScoredDocument], SearchRequest], Awaitable[list[ScoredDocument]]
 ]
@@ -93,26 +79,23 @@ CiteFn = Callable[[list[ScoredDocument], SearchRequest], list[Citation]]
 
 
 class SearchPipeline:
-    """Multi-dataset retrieval+gen orchestrator per Contract 8.
+    """多 dataset 检索 + 生成编排器。
 
     Args:
-        subgraphs: Map of ``dataset_id -> SearchSubgraph``. Each subgraph
-            owns its own vector+fulltext retrievers (per dataset).
-        query_ext: Optional query extension. None = identity (only original
-            query is used, no LLM rewrite).
-        filter_score_threshold: Optional per-source raw score threshold
-            for ``filter_by_score`` (Contract 2: reads ``score_breakdown``,
-            not RRF ``.score``). None = no threshold filter.
-        token_budget: Max tokens for final hits (default 960K for
-            MiniMax-M3 1M context minus 40K headroom).
-        rerank: Optional stage 4+5 callback. None = no rerank.
-        parent_doc: Optional stage 8 callback. None = no expansion.
-        cite: Optional stage 9 callback. None = empty citations.
-        gen: Optional stage 10 callback. None = empty response.
-        rrf_k: RRF k constant for intra_fusion calls (default 60).
+        subgraphs: ``dataset_id -> SearchSubgraph`` 映射, 每个 subgraph
+            拥有各自的 vector + fulltext retriever。
+        query_ext: 可选 query 改写组件, None = identity (仅使用原 query)。
+        filter_score_threshold: 可选 per-source raw score 阈值, 传入
+            ``filter_by_score``; 读取 ``score_breakdown`` 而非 RRF ``.score``。
+        token_budget: 最终 hits 的最大 token 数。
+        rerank: 可选 rerank 回调, None = 不做 rerank。
+        parent_doc: 可选 parent_doc 扩展回调, None = 不做扩展。
+        cite: 可选 cite 回调, None = 空 citations。
+        gen: 可选生成回调, None = 空 response。
+        rrf_k: intra_fusion 的 RRF k 常数。
 
     Raises:
-        ValueError: If ``subgraphs`` is empty.
+        ValueError: ``subgraphs`` 为空时。
     """
 
     def __init__(
@@ -142,15 +125,13 @@ class SearchPipeline:
         self.rrf_k = rrf_k
 
     async def ainvoke(self, req: SearchRequest) -> SearchResult:
-        """Run the 10-stage pipeline. Returns ``SearchResult`` with
-        ``_intermediate_hits`` populated (Contract 6).
-        """
+        """执行完整编排, 返回填充好 ``_intermediate_hits`` 的 ``SearchResult``。"""
         internal_warnings: list[str] = []
 
-        # Stage 1: query extension (None → identity, single variant = original)
+        # 阶段 1: query 改写 (None → identity, 单 variant 即原 query)
         variants = self._extend_query(req, internal_warnings)
 
-        # Stages 2-3: per-variant per-dataset retrieval + inter-variant fusion
+        # 阶段 2-3: per-variant per-dataset 检索 + 跨 variant 融合
         variant_hits: list[list[ScoredDocument]] = await asyncio.gather(
             *(self._recall_one_variant(v, req, internal_warnings) for v in variants)
         )
@@ -158,11 +139,11 @@ class SearchPipeline:
             intra_fusion(variant_hits, rrf_k=self.rrf_k) if variant_hits else []
         )
 
-        # Stage 4-5: rerank + re-fuse (optional)
+        # 阶段 4-5: rerank + re-fuse (可选)
         if self.rerank is not None:
             fused = await self.rerank(fused, req)
 
-        # Stage 7: filter (dedup by chunk_id, then threshold, then token budget)
+        # 阶段 7: 过滤 (chunk_id 去重 → 阈值 → token 预算)
         fused = _dedup_by_chunk_id(fused)
         if self.filter_score_threshold is not None and fused:
             fused, _ = filter_by_score(
@@ -173,16 +154,16 @@ class SearchPipeline:
         if fused:
             fused = filter_by_token_budget(fused, max_tokens=self.token_budget)
 
-        # Stage 8: parent_doc expand (optional)
+        # 阶段 8: parent_doc 扩展 (可选)
         if self.parent_doc is not None and fused:
             fused = await self.parent_doc(fused, req)
 
-        # Stage 9: cite (optional)
+        # 阶段 9: cite (可选)
         citations: list[Citation] = (
             list(self.cite(fused, req)) if self.cite is not None else []
         )
 
-        # Stage 10: generation (optional)
+        # 阶段 10: 生成 (可选)
         response: str = (
             await self.gen(fused, citations, req) if self.gen is not None else ""
         )
@@ -198,10 +179,10 @@ class SearchPipeline:
         result._intermediate_hits = list(fused)
         return result
 
-    # ---- Stage helpers ----
+    # ---- Stage 辅助方法 ----
 
     def _extend_query(self, req: SearchRequest, warnings: list[str]) -> list[str]:
-        """Stage 1: produce query variants. None → [req.query] identity."""
+        """阶段 1: 产出 query variants。None → [req.query] identity。"""
         if self.query_ext is None:
             return [req.query]
         try:
@@ -226,7 +207,7 @@ class SearchPipeline:
         req: SearchRequest,
         warnings: list[str],
     ) -> list[ScoredDocument]:
-        """Stage 2 (per-variant): per-dataset subgraph retrieval in parallel."""
+        """阶段 2 (per-variant): 并行执行各 dataset subgraph 检索。"""
         per_dataset_results = await asyncio.gather(
             *(
                 self._safe_subgraph(ds_id, variant, warnings)
@@ -246,8 +227,7 @@ class SearchPipeline:
         query: str,
         warnings: list[str],
     ) -> list[ScoredDocument]:
-        """Call subgraph with safe error handling — a failing dataset
-        must not abort the whole pipeline."""
+        """调用 subgraph 并做安全错误处理, 单个 dataset 失败不中断整体 pipeline。"""
         sg = self.subgraphs[ds_id]
         try:
             return list(await sg.ainvoke(query))
@@ -262,17 +242,15 @@ class SearchPipeline:
             return []
 
 
-# ---------- Pure helpers ----------
+# ---------- 纯辅助函数 ----------
 
 
 def _dedup_by_chunk_id(docs: list[ScoredDocument]) -> list[ScoredDocument]:
-    """Stable chunk_id dedup preserving first-seen order.
+    """按 chunk_id 稳定去重, 保留首次出现顺序。
 
-    Why not ``rag.infra.observability.trace.remove_duplicates``: it requires
-    ``RetrievalTrace`` parallel array (q, a), which the orchestrator
-    doesn't carry at the post-fusion stage. At this point, hits have
-    been RRF-merged across variants+datasets; we only need to drop
-    accidental repeats.
+    不用 ``rag.infra.observability.trace.remove_duplicates``: 它需要
+    ``RetrievalTrace`` 的并行 (q, a) 数组, 而编排器在融合后并不持有
+    该结构。此处只需丢弃跨 variant + dataset RRF 合并后的意外重复。
     """
     seen: set[uuid.UUID] = set()
     out: list[ScoredDocument] = []

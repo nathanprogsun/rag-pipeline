@@ -1,20 +1,12 @@
-"""Filter pipeline: dedup + 阈值过滤 + token 预算。
-
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 2:
+"""过滤管道: 去重 + 阈值过滤 + token 预算。
 
 签名::
-
-    remove_duplicates(docs, traces)              # re-export from rag.infra.observability.trace
     filter_by_score(docs, threshold, search_mode) -> tuple[list[ScoredDocument], bool]
     filter_by_token_budget(docs, max_tokens, tokenizer=None) -> list[ScoredDocument]
 
-阈值过滤的语义:
-- 读 ``score_breakdown[source]`` (per-source raw), 不是 ``.score`` (RRF sum)
-- ``search_mode != embedding`` 时是 no-op (fulltext 没向量相似度)
-- 返回 ``(filtered_docs, using_similarity_filter)`` 元组, 调用方可知是否真过滤
-
-token 预算: 默认 960K (MiniMax-M3 1M context 留 40K headroom);
-tokenizer 用 ``rag.infra.llm.tokenizer`` 模块(MiniMax-M3 BPE, lazy 下载)。
+阈值过滤读取 ``score_breakdown[source]`` (per-source raw), 而非 ``.score`` (RRF sum);
+``search_mode == "fulltext"`` 时为 no-op。token 预算默认 960K (留 40K headroom);
+tokenizer 来自 ``rag.infra.llm.tokenizer`` (MiniMax-M3 BPE, lazy 下载)。
 """
 
 from __future__ import annotations
@@ -48,13 +40,12 @@ def filter_by_score(
     threshold: float,
     search_mode: SearchMode = "embedding",
 ) -> tuple[list[ScoredDocument], bool]:
-    """Per-source raw similarity threshold filter.
+    """按 per-source raw similarity 阈值过滤。
 
-    Contract 2 invariants:
-    - Reads ``score_breakdown[source]`` (per-source raw), NOT ``.score`` (RRF sum).
-    - ``search_mode == "fulltext"`` -> no-op; returns ``(docs, False)``.
-    - ``search_mode == "mixed"`` -> uses ``max(vector, fulltext)`` per chunk.
-    - ``search_mode == "embedding"`` -> uses ``score_breakdown["vector"]``.
+    - 读 ``score_breakdown[source]`` (per-source raw), 而非 ``.score`` (RRF sum)。
+    - ``search_mode == "fulltext"``: no-op, 返回 ``(docs, False)``。
+    - ``search_mode == "mixed"``: 取每 chunk 的 ``max(vector, fulltext)``。
+    - ``search_mode == "embedding"``: 使用 ``score_breakdown["vector"]``。
     """
     if search_mode == "fulltext":
         return list(docs), False
@@ -81,7 +72,7 @@ def filter_by_token_budget(
     max_tokens: int = DEFAULT_TOKEN_BUDGET,
     tokenizer: Tokenizer | None = None,
 ) -> list[ScoredDocument]:
-    """Greedy token-budget filter using MiniMax-M3 tokenizer (BPE)."""
+    """贪心式 token 预算过滤 (使用 MiniMax-M3 BPE tokenizer)。"""
     tok = tokenizer if tokenizer is not None else _default_tokenizer()
     used = 0
     kept: list[ScoredDocument] = []

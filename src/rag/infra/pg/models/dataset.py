@@ -8,6 +8,8 @@ from rag.infra.pg.base import Base, SoftDeleteMixin, TimestampMixin
 
 
 class DatasetModel(Base, TimestampMixin, SoftDeleteMixin):
+    """``datasets`` 表的 ORM 模型。"""
+
     __tablename__ = "datasets"
 
     id: Mapped[uuid.UUID] = mapped_column(

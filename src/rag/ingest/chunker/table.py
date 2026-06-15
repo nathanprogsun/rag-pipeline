@@ -1,13 +1,4 @@
-r"""Markdown 表格检测 + 切分。
-
-严格 4 条件校验:
-  1. >= 2 行
-  2. header 行以 | 开头且以 | 结尾
-  3. sep 行匹配 ^(\|[\s:]*-+[\s:]*)+\|$
-  4. data 行 (如有) 也以 | 开头且以 | 结尾
-
-兜底: 单行超 chunk_size → 调用 common_split 按单元格递归切。
-"""
+"""Markdown 表格检测与按行切分: 严格 4 条件判定, 单行超长按 cell 递归兜底。"""
 
 from __future__ import annotations
 
@@ -21,6 +12,14 @@ _PIPE_RE = re.compile(r"^\s*\|.*\|\s*$")
 
 
 def str_is_md_table(text: str) -> bool:
+    """判断文本是否为合法 Markdown 表格 (严格 4 条件: 行数、header ``|`` 包围、sep 行正则、data 行 ``|`` 包围)。
+
+    Args:
+        text: 待判断文本。
+
+    Returns:
+        是合法 Markdown 表格返回 True, 否则 False。
+    """
     lines = text.split("\n")
     if len(lines) < 2:
         return False
@@ -44,10 +43,7 @@ def _split_oversized_row(
     overlap_len: int,
     paragraph_chunk_min_size: int,
 ) -> list[str]:
-    """单行超 chunk_size 时, 按 cells 切分并对每个 cell 递归走 common_split。
-
-    保留 Markdown 行结构: 把 cell 内容转成 '|' 分隔的扁平行, 切完后拼回。
-    """
+    """单行超 ``chunk_size`` 时按 cell 递归走 ``common_split``, 切完后拼回 Markdown 行结构 (头尾补 ``|``)。"""
     cell_match = re.match(r"^\s*\|(.*)\|\s*$", row)
     if not cell_match:
         return common_split(
@@ -98,9 +94,17 @@ def markdown_table_split(
     overlap_ratio: float = 0.15,
     paragraph_chunk_min_size: int = 100,
 ) -> list[str]:
-    """按 chunk_size 切分, 每块重复 header + sep。
+    """按 ``chunk_size`` 切分 Markdown 表格, 每块重复 ``header + sep`` 行。单行超长时按 cell 递归兜底。
 
-    单行超 chunk_size → 走 _split_oversized_row 按 cell 递归兜底, 避免硬并。
+    Args:
+        text: 待切分的 Markdown 表格文本。
+        chunk_size: 单块长度上限, 默认 1000。
+        max_size: 硬上限, 默认 ``chunk_size * 8``。
+        overlap_ratio: 块间 overlap 比例, 用于内部 ``common_split``, 默认 0.15。
+        paragraph_chunk_min_size: 传递给 ``common_split`` 的段落最小长度。
+
+    Returns:
+        切分后的 chunk 列表。若 ``text`` 不被识别为 Markdown 表格则返回 ``[text]``。
     """
     if not str_is_md_table(text):
         return [text]
@@ -151,5 +155,5 @@ def markdown_table_split(
     if len(buf_lines) > 2:
         chunks.append("\n".join(buf_lines))
 
-    _ = sep  # sep 保留兼容
+    _ = sep  # sep 仅用于保持与上游结构兼容, 不参与切分
     return chunks

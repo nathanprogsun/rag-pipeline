@@ -11,14 +11,14 @@ from rag.infra.pg.models.chunk import ChunkModel
 
 
 class ChunkRepository:
-    """Chunk 数据访问 (Repository 模式). Session 由调用方注入。
-
-    公共 API 一律返回 / 接受 ``DomainChunk``, ChunkModel 仅在 SQLAlchemy
-    查询内部使用, 通过 mapper 转换。这样 retriever / service 层不再直接
-    依赖 ORM 类, 字段映射集中到 ``infra.pg.mappers``。
-    """
+    """`Chunk` 数据仓储。`AsyncSession` 由调用方注入，公共 API 全部以 `DomainChunk` 形式收发。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """初始化仓储。
+
+        Args:
+            session: 外部注入的 SQLAlchemy 异步会话。
+        """
         self.session = session
 
     async def search_by_vector(
@@ -27,8 +27,17 @@ class ChunkRepository:
         dataset_id: uuid.UUID,
         top_k: int = 10,
     ) -> list[tuple[DomainChunk, float]]:
-        # SET LOCAL 不支持参数化 SQL, 改用 f-string 字面量
-        # (ef 是 int, 无注入风险)
+        """按余弦相似度检索 top_k 文本块。
+
+        Args:
+            query_vec: 查询向量。
+            dataset_id: 数据集 ID。
+            top_k: 返回结果数量。
+
+        Returns:
+            `(DomainChunk, score)` 元组列表，按相似度降序。
+        """
+        # `SET LOCAL` 不支持参数化；`ef_search` 为整数, 无注入风险
         await self.session.execute(
             text(f"SET LOCAL hnsw.ef_search = {max(top_k * 2, 40)}")
         )
@@ -53,8 +62,17 @@ class ChunkRepository:
         dataset_id: uuid.UUID,
         top_k: int = 10,
     ) -> list[tuple[DomainChunk, float]]:
-        # to_tsquery 不接受 multi-word 输入 (空格 syntax error)。
-        # 改用 websearch_to_tsquery (PG 11+), 像 Google 搜索一样处理空格。
+        """按全文检索相关度检索 top_k 文本块。
+
+        Args:
+            ts_query: 已经过分词的 `&` 连接查询串。
+            dataset_id: 数据集 ID。
+            top_k: 返回结果数量。
+
+        Returns:
+            `(DomainChunk, score)` 元组列表，按 `ts_rank` 降序。
+        """
+        # 使用 `websearch_to_tsquery` 解析带空格的输入, 避免 `to_tsquery` 语法错误
         ts_query_expr = func.websearch_to_tsquery("simple", ts_query)
         stmt = (
             select(
@@ -75,6 +93,7 @@ class ChunkRepository:
         return list(zip(chunk_model_list_to_domain(models), scores, strict=True))
 
     async def delete_by_filename(self, dataset_id: uuid.UUID, filename: str) -> None:
+        """按文件名软删除（写入 `deleted_at`）。"""
         await self.session.execute(
             update(ChunkModel)
             .where(
@@ -88,29 +107,21 @@ class ChunkRepository:
         )
 
     async def bulk_insert(self, chunks: list[DomainChunk]) -> None:
-        """业务层 DomainChunk 列表写入。 mapper 负责 DomainChunk -> ChunkModel。
+        """批量写入 `DomainChunk` 列表。
 
-        本方法 ``flush()`` 但不 ``commit()``: 触发 auto-increment / unique
-        约束错误在方法内抛出, 调用方仍按契约负责 ``commit()`` / 包裹在
-        :meth:`transaction` 中。
+        本方法 `flush()` 但不 `commit()`：约束错误立即抛出，由调用方
+        决定 `commit()` 或通过 `transaction()` 上下文回滚。
         """
         self.session.add_all(domain_chunk_to_model(c) for c in chunks)
         await self.session.flush()
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
-        """Repository 级事务上下文: 进入时暂不 begin, 退出时 commit。
+        """仓储级事务上下文：正常结束提交，异常回滚后重新抛。
 
-        正常结束 -> ``commit()``; 异常 -> ``rollback()`` 后重新抛。 用于
-        多 repo 方法需要原子写入的场景, 调用方不再手动 commit / rollback::
+        用于多步写入需原子的场景，调用方无需手动 `commit` / `rollback`。
 
-            async with chunk_repo.transaction():
-                await chunk_repo.bulk_insert(chunks)
-                await other_repo.touch(dataset_id)
-
-        注意: session 仍由外层调用方注入并负责生命周期 (close)。 嵌套时
-        SQLAlchemy 2.x 的 AsyncSession 通过 SAVEPOINT 处理, 但本 helper
-        设计为单层使用。
+        注意：session 生命周期仍由外层负责；本 helper 设计为单层使用。
         """
         try:
             yield
@@ -124,9 +135,10 @@ class ChunkRepository:
         self,
         dataset_id: uuid.UUID,
         parent_title: str,
-        lo: int,  # lower index, 下限
-        hi: int,  # higher index, 上限
+        lo: int,  # `chunk_index` 下限
+        hi: int,  # `chunk_index` 上限
     ) -> list[DomainChunk]:
+        """按 `parent_title` 与索引区间取相邻文本块。"""
         stmt = (
             select(ChunkModel)
             .where(
@@ -143,6 +155,7 @@ class ChunkRepository:
         return chunk_model_list_to_domain(list(result.scalars().all()))
 
     async def count_by_dataset(self, dataset_id: uuid.UUID) -> int:
+        """统计数据集内未删除的文本块数量。"""
         stmt = (
             select(func.count())
             .select_from(ChunkModel)

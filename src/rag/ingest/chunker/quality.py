@@ -1,4 +1,4 @@
-"""Chunk 质量指标: 供 CLI ``--chunk-stats`` 与回归测试复用。"""
+"""Chunk 切分质量指标, 供 CLI 与回归测试复用。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ _BAD_BOUNDARY_START: frozenset[str] = frozenset("，。！？；、,.;!?")
 
 @dataclass(frozen=True)
 class ChunkQualityMetrics:
+    """切分质量指标汇总。"""
+
     chunk_count: int
     avg_valid_len: float
     median_valid_len: float
@@ -22,7 +24,15 @@ class ChunkQualityMetrics:
 
 
 def measure_chunks(chunks: list[Chunk], chunk_size: int) -> ChunkQualityMetrics:
-    """从 ``Chunk`` 列表计算切分质量指标。"""
+    """从 `Chunk` 列表汇总切分质量指标。
+
+    Args:
+        chunks: 切分结果。
+        chunk_size: 配置的目标 chunk 大小, 用于定义"达标区间"。
+
+    Returns:
+        包含平均值、中位数、覆盖率和坏边界率等指标的 `ChunkQualityMetrics`。
+    """
     if not chunks:
         return ChunkQualityMetrics(
             chunk_count=0,
@@ -66,7 +76,15 @@ def measure_chunks(chunks: list[Chunk], chunk_size: int) -> ChunkQualityMetrics:
 
 
 def format_chunk_stats(metrics: ChunkQualityMetrics, chunk_size: int) -> str:
-    """人类可读的 stats 块 (多行)。"""
+    """将指标格式化为多行可读字符串。
+
+    Args:
+        metrics: 已计算的指标。
+        chunk_size: 目标 chunk 大小, 用于展示达标区间下界。
+
+    Returns:
+        多行可读的统计文本。
+    """
     return (
         f"chunk_stats: count={metrics.chunk_count} "
         f"avg_valid_len={metrics.avg_valid_len:.0f} "

@@ -1,19 +1,9 @@
-"""raw text 读取 + 编码兜底 + markdown base64 图抽取.
-
-对齐参考实现:
- - rawText.ts (Node) 的 ``rawEncodingList`` 白名单
- - ascii + 非 ASCII 字节时的 utf-8 降级
- - iconv-lite / codecs.lookup 兜底
- - markdown 内 ``data:image/...;base64,...`` 上传后替换
+"""raw text 读取 + 编码兜底 + markdown base64 图抽取。
 
 设计:
- - 不抛编码异常: 任何编码失败都退到 ``buffer.decode('utf-8', errors='replace')``.
- - 图上传失败也走 fallback: 上传函数异常时把 data URL 整段删除.
- - ``UploadFileHandler`` 是 ``Awaitable`` 形态, 与 docx adapter 的
-   ``UploadImageFn`` 风格一致; 本模块所有 IO 都走 ``async``.
-
-类型: ``UploadFileHandler`` / ``UploadedFileResult`` 在 ``reader.types`` 单一
-定义, 本模块 re-import 使用, 避免类型重复定义 (R3-B 类型统一).
+ - 不抛编码异常: 任何编码失败都退到 ``buffer.decode('utf-8', errors='replace')``。
+ - 图上传失败也走 fallback: 上传函数异常时把 data URL 整段删除。
+ - `UploadFileHandler` 是 `Awaitable` 形态, 本模块所有 IO 都走 `async`。
 """
 
 from __future__ import annotations
@@ -61,7 +51,7 @@ RAW_ENCODING_LIST: frozenset[str] = frozenset(
 
 
 def _has_non_ascii_byte(buffer: bytes) -> bool:
-    """buffer 含 > 0x7F 字节时返回 True, 用于 ascii 编码时的降级判定."""
+    """buffer 含 > 0x7F 字节时返回 True, 用于 ascii 编码时的降级判定。"""
     for b in buffer:
         if b > 0x7F:
             return True
@@ -87,7 +77,14 @@ _DETECT_FALLBACK_ENCODINGS: tuple[str, ...] = (
 
 
 def detect_text_encoding(buffer: bytes) -> str:
-    """无第三方依赖的文本编码探测: BOM → strict utf-8 → 常见 locale 编码 trial."""
+    """无第三方依赖的文本编码探测: BOM → strict utf-8 → 常见 locale 编码 trial。
+
+    Args:
+        buffer: 输入字节内容。
+
+    Returns:
+        推断出的编码名。
+    """
     if not buffer:
         return "utf-8"
 
@@ -115,7 +112,15 @@ def detect_text_encoding(buffer: bytes) -> str:
 
 
 def resolve_text_encoding(buffer: bytes, encoding: str = "utf-8") -> str:
-    """解析最终解码编码: 仅当请求为默认 utf-8 时自动探测, 显式指定则尊重调用方."""
+    """解析最终解码编码: 仅当请求为默认 utf-8 时自动探测, 显式指定则尊重调用方。
+
+    Args:
+        buffer: 输入字节内容。
+        encoding: 调用方指定的编码。
+
+    Returns:
+        最终使用的编码名。
+    """
     normalized = _normalize_encoding_name(encoding)
     if normalized in ("utf-8", ""):
         detected = detect_text_encoding(buffer)
@@ -126,12 +131,12 @@ def resolve_text_encoding(buffer: bytes, encoding: str = "utf-8") -> str:
 
 
 def _decode_buffer(buffer: bytes, encoding: str) -> str:
-    """按 ``encoding`` 解码, 任何异常都退到 ``utf-8`` + ``errors='replace'``.
+    """按 ``encoding`` 解码, 任何异常都退到 ``utf-8`` + ``errors='replace'``。
 
     优先级:
-    1. 白名单内: ``buffer.decode(encoding)``. ascii 遇非 ASCII 字节降级 utf-8.
-    2. 其它编码: 通过 ``codecs.decode`` 走 stdlib codec (gbk / big5 / ...).
-    3. 全部失败: ``buffer.decode('utf-8', errors='replace')``.
+    1. 白名单内: ``buffer.decode(encoding)``。ascii 遇非 ASCII 字节降级 utf-8。
+    2. 其它编码: 通过 ``codecs.decode`` 走 stdlib codec (gbk / big5 / ...)。
+    3. 全部失败: ``buffer.decode('utf-8', errors='replace')``。
     """
     normalized = _normalize_encoding_name(encoding)
 
@@ -182,7 +187,7 @@ _MD_BASE64_IMAGE_RE = re.compile(
 
 
 class _Base64ImageMatch:
-    """内部辅助: 一次匹配产出一个 base64 图位置 + 完整 markdown 片段."""
+    """内部辅助: 一次匹配产出一个 base64 图位置 + 完整 markdown 片段。"""
 
     __slots__ = ("full_match", "mime", "base64", "start", "end")
 
@@ -197,7 +202,7 @@ class _Base64ImageMatch:
 
 
 def _scan_base64_images(content: str) -> list[_Base64ImageMatch]:
-    """扫描 content 中所有 ``![...](data:image/...;base64,...)`` 整段图."""
+    """扫描 content 中所有 ``![...](data:image/...;base64,...)`` 整段图。"""
     results: list[_Base64ImageMatch] = []
     for m in _MD_BASE64_IMAGE_RE.finditer(content):
         full = m.group(0)
@@ -221,7 +226,7 @@ async def _upload_one(
     upload_file: UploadFileHandler,
     idx: int,
 ) -> str:
-    """调上传回调, 返回对象存储 key. 失败时返回 ``""`` (整段 data URL 被删)."""
+    """调上传回调, 返回对象存储 key。失败时返回 ``""`` (整段 data URL 被删)。"""
     name = f"md_base64_{idx}.{match.mime.rsplit('/', 1)[-1]}"
     try:
         image_bytes = base64.b64decode(match.base64, validate=False)
@@ -241,7 +246,7 @@ async def _parse_markdown_base64_images(
     content: str,
     upload_file: UploadFileHandler | None,
 ) -> str:
-    """替换 content 中的 base64 data URL → 上传后的 key, 无上传器时整段删除.
+    """替换 content 中的 base64 data URL → 上传后的 key, 无上传器时整段删除。
 
     替换语义:
     - controller 返回 ``{key: "..."}`` → 用 ``![...](key)`` 替换整段
@@ -277,18 +282,18 @@ async def read_raw_text(
     encoding: str = "utf-8",
     upload_file: UploadFileHandler | None = None,
 ) -> str:
-    """bytes → 解码文本 (+ 可选 base64 图抽取).
+    """bytes → 解码文本 (+ 可选 base64 图抽取)。
 
     Args:
-        buffer: 文件二进制内容.
-        encoding: 文本编码 (大小写不敏感). 空字符串 / 未知编码 / 解码失败
-            都退到 ``utf-8`` + ``errors='replace'``.
-        upload_file: 可选, 异步上传回调. markdown 中的
+        buffer: 文件二进制内容。
+        encoding: 文本编码 (大小写不敏感)。空字符串 / 未知编码 / 解码失败
+            都退到 ``utf-8`` + ``errors='replace'``。
+        upload_file: 可选, 异步上传回调。markdown 中的
             ``data:image/...;base64,...`` 会被解码 + 上传 + 替换为 key;
-            上传失败 / 未传 upload_file → 删除整段 data URL.
+            上传失败 / 未传 upload_file → 删除整段 data URL。
 
     Returns:
-        解码后的文本; 任何阶段异常均不抛出.
+        解码后的文本; 任何阶段异常均不抛出。
     """
     resolved = resolve_text_encoding(buffer, encoding)
     decoded = _decode_buffer(buffer, resolved)

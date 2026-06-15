@@ -1,3 +1,5 @@
+"""缓存 key 命名与哈希工具。"""
+
 import hashlib
 import json
 import uuid

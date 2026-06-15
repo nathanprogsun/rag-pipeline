@@ -1,22 +1,11 @@
-"""Rerank stage 4+5 per Contract 8.
+"""Rerank 阶段: 重排 + 重新融合。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 8:
-
-  4. Rerank (text-only hits) — this module
-  5. Re-fuse intra_fusion over [reranked_text_hits, original_text_hits]
-     with weights=[rerank_weight, 1 - rerank_weight]
-
-Invariants:
-- Rerank is **text-only**: image_caption modality hits bypass rerank
-  (Contract 8: "Image hits bypass step 4 and are added at step 5/6
-   with weight 1.0").
-- score_breakdown["rerank"] is populated with raw rerank score (Contract 2).
-- ``rerank_score`` (ScoredDocument field) is also populated for downstream
-  consumers that read it directly.
-- intra_fusion re-fuse applies per-source max merge on score_breakdown,
-  preserving vector / fulltext / rerank raw scores.
-- On reranker failure: log warning + fall back to original order
-  (no crash, orchestrator's downstream stages still work).
+- Rerank 仅作用于文本模态, ``image_caption`` 命中跳过 rerank, 在重融
+  合时以权重 1.0 合并。
+- ``score_breakdown["rerank"]`` 写入原始 rerank 分数, ``rerank_score``
+  字段同步填充, 供下游消费。
+- ``intra_fusion`` 重融合时对 ``score_breakdown`` 做 per-source max 合并。
+- Rerank 失败时记录 warning 并回退到原始顺序, 不中断 pipeline。
 """
 
 from __future__ import annotations
@@ -33,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class RerankStageProtocol(Protocol):
-    """Stage 4+5 callback. Takes fused hits, returns re-fused hits."""
+    """Rerank 阶段回调, 接收融合后的 hits, 返回重融合结果。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -41,7 +30,7 @@ class RerankStageProtocol(Protocol):
 
 
 class _TextReranker(Protocol):
-    """Text-only reranker contract. ``(idx, score)`` pairs by relevance desc."""
+    """纯文本 reranker 契约, 返回 ``(idx, score)`` 对 (按相关性降序)。"""
 
     async def rerank(
         self, query: str, documents: list[str], top_k: int
@@ -49,9 +38,7 @@ class _TextReranker(Protocol):
 
 
 class NoOpRerankStage:
-    """Identity passthrough — used when rerank is disabled (no API key,
-    use_rerank=False in SearchRequest.retrieval).
-    """
+    """恒等透传, 用于禁用 rerank 的场景 (无 API key 或显式关闭)。"""
 
     async def __call__(
         self, docs: list[ScoredDocument], req: SearchRequest
@@ -60,31 +47,23 @@ class NoOpRerankStage:
 
 
 class RerankStageAdapter:
-    """Stage 4+5 adapter: rerank text hits + re-fuse with original.
+    """Rerank 阶段适配器: 重排文本 hits + 与原始顺序重融合。
 
-    Per Contract 8:
-      1. Split docs into text (modality=text) and image (modality=image_caption).
-      2. Rerank text docs via ``self.reranker``.
-      3. Populate ``score_breakdown["rerank"]`` and ``rerank_score`` on
-         reranked copies (Contract 2 invariant).
-      4. Re-fuse: ``intra_fusion([reranked, original_text],
-         weights=[rerank_weight, 1-rerank_weight])``.
-      5. Append image hits via ``intra_fusion([..., image], weights=[1, 1])``
-         — image hits bypass rerank per Contract 8.
+    1. 按 modality 拆分为 text 与 image_caption。
+    2. 对 text 部分调用 ``self.reranker`` 重排。
+    3. 在重排后的副本上填充 ``score_breakdown["rerank"]`` 与 ``rerank_score``。
+    4. ``intra_fusion([reranked, original_text], weights=[rerank_weight, 1-rerank_weight])``。
+    5. 用 ``intra_fusion([..., image], weights=[1, 1])`` 合并 image 命中 (跳过 rerank)。
 
     Args:
-        reranker: Text-only reranker (e.g. ``rag.infra.llm.rerank.QwenRerank``
-            or ``NoOpRerank``). Must implement ``rerank(query, docs, top_k)
-            -> list[(idx, score)]``.
-        rerank_weight: Per-source weight for reranked hits in re-fuse
-            (default 0.7, matches FastGPT default). 1.0 = trust rerank
-            fully; 0.0 = trust original RRF fully.
-        on_error: Optional async callback receiving the original docs and
-            the exception, for logging/warnings. None means silent fallback.
+        reranker: 纯文本 reranker, 需实现 ``rerank(query, docs, top_k) -> list[(idx, score)]``。
+        rerank_weight: 重融时 reranked 列表的权重, 范围 ``[0, 1]``,
+            1.0 = 完全信任 rerank, 0.0 = 完全信任原始 RRF。
+        on_error: 可选异步错误回调, 接收原始 docs 与异常。
 
     Raises:
-        Never — reranker exceptions are caught, logged, and the original
-        docs are returned unchanged (orchestrator keeps working).
+        ValueError: ``rerank_weight`` 越界。
+        永不因 reranker 异常抛出: 异常被捕获、记录, 并返回原始顺序。
     """
 
     DEFAULT_RERANK_WEIGHT: float = 0.7

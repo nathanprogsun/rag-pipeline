@@ -1,21 +1,15 @@
-"""Citation marker parsing + validation per Contract 5.
+"""引用标记 ``[id](CITE)`` 的解析与校验。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 5:
-- LLM's response contains ``[id](CITE)`` markers where id is 1-based
-  index into ``SearchResult.citations``.
-- ``CitationChecker`` validates that all markers map to actual citations,
-  and reports orphan citations (in citations list but not referenced).
+- LLM 响应中的 ``[id](CITE)`` 标记, ``id`` 为 ``SearchResult.citations`` 的 1-based 下标。
+- ``CitationChecker`` 校验所有标记都能映射到实际引用, 并报告孤立引用
+  （存在于 citations 列表但未在响应中引用）。
+- 同时提供 cite 阶段使用的解析辅助函数: ``parse_inline_citations`` 抽取 id,
+  ``resolve_citation_positions`` 回填 ``Citation.position``。
 
-Also provides marker-parsing helpers used by the cite stage:
-- ``parse_inline_citations(response)``: extract 1-based ids from markers
-- ``resolve_citation_positions(response, citations)``: fill Citation.position
+本模块只依赖 ``rag.domain.search.Citation`` 类型与本地正则, 放在
+``infra/text/`` 下避免反向依赖业务包。
 
-This module is the consolidated home for all citation-marker text logic;
-it depends only on ``rag.domain.search.Citation`` (type) and the local regex,
-so it lives in ``infra/text/`` with no business-package dependency.
-
-Note: regex-based validation only (no LLM hallucination detection, per
-audit G-P0-2).
+注: 仅做正则层校验, 不检测 LLM 幻觉。
 """
 
 from __future__ import annotations
@@ -26,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from rag.domain.search import Citation
 
-# Regex: [N](CITE) where N is 1+ digits. Captures the number.
+# 正则: [N](CITE), N 为 1 位或多位数字, 捕获组为编号。
 _INLINE_CITE_RE: re.Pattern[str] = re.compile(r"\[(\d+)\]\(CITE\)")
 
 
@@ -34,16 +28,10 @@ _INLINE_CITE_RE: re.Pattern[str] = re.compile(r"\[(\d+)\]\(CITE\)")
 
 
 def parse_inline_citations(response: str) -> list[int]:
-    """Parse ``[id](CITE)`` markers in response text.
+    """从响应文本中解析 ``[id](CITE)`` 标记。
 
-    Returns ordered list of 1-based citation ids referenced. A single
-    response may reference the same id multiple times; each occurrence
-    is captured (callers can dedup with ``sorted(set(...))``).
-
-    Examples:
-        "a [1](CITE) b [2](CITE) c" -> [1, 2]
-        "cited [3](CITE) and [3](CITE) again" -> [3, 3]
-        "no citations here" -> []
+    返回按出现顺序排列的 1-based 引用 id 列表; 同一 id 多次出现都会被
+    保留（调用方可用 ``sorted(set(...))`` 去重）。
     """
     if not response:
         return []
@@ -54,22 +42,20 @@ def resolve_citation_positions(
     response: str,
     citations: list[Citation],
 ) -> list[Citation]:
-    """Populate ``Citation.position`` based on ``[id](CITE)`` markers.
+    """基于 ``[id](CITE)`` 标记填充 ``Citation.position``。
 
-    For each ``citations[i]`` (0-based) corresponding to ``id=i+1``,
-    finds the FIRST occurrence of ``[i+1](CITE)`` in ``response`` and
-    sets ``citation.position`` to the character offset of that marker.
+    对每个 ``citations[i]``（0-based, 对应 id ``i+1``）找到响应中
+    ``[i+1](CITE)`` 的首次出现位置, 写入 ``citation.position`` 字符偏移。
 
-    Citations not referenced in ``response`` get ``position=None``.
-    Citations with id out of range (id > len(citations)) are ignored
-    by the regex (no match), so they also get ``position=None``.
+    未被引用的 ``Citation`` 位置为 ``None``; id 越界的引用也会得到 ``None``
+    （正则匹配不到）。
 
     Args:
-        response: LLM-generated response text (may be empty).
-        citations: Citation list, 0-based; position[i] corresponds to id i+1.
+        response: LLM 生成的响应文本（可为空）。
+        citations: 0-based 引用列表; ``position[i]`` 对应 id ``i+1``。
 
     Returns:
-        New list of Citation with ``position`` field populated where applicable.
+        新的 ``Citation`` 列表, 已被引用的条目 ``position`` 已填充。
     """
     if not response or not citations:
         return list(citations)
@@ -95,20 +81,17 @@ def resolve_citation_positions(
 
 
 class CitationCheckResult(BaseModel):
-    """Result of validating ``[id](CITE)`` markers in a response.
+    """响应中 ``[id](CITE)`` 标记的校验结果。
 
     Attributes:
-        valid: True iff all referenced ids are in range ``[1, len(citations)]``.
-        referenced_ids: Ordered list of ids found in response (with duplicates
-            preserved, as in parse_inline_citations).
-        referenced_unique: Sorted unique ids.
-        out_of_range_ids: ids referenced in response but ``> len(citations)``
-            or ``< 1``.
-        orphan_citation_indices: 0-based indices into ``citations`` for
-            citations NOT referenced anywhere in the response. (0-based
-            indices, NOT 1-based ids — add 1 to get the [id] value.)
-        unused_orphan_marker_ids: 1-based ids that resolve to no citation
-            (alias for out_of_range_ids, for symmetry in caller code).
+        valid: 所有被引用的 id 都在 ``[1, len(citations)]`` 范围内时为 ``True``。
+        referenced_ids: 按出现顺序排列的 id 列表（保留重复项）。
+        referenced_unique: 去重并升序排列的 id 列表。
+        out_of_range_ids: 响应中引用但超出 ``[1, len(citations)]`` 范围的 id。
+        orphan_citation_indices: ``citations`` 中未被引用的条目下标（0-based,
+            不是 1-based id）。
+        unused_orphan_marker_ids: 解析不到对应引用的 1-based id
+            （与 ``out_of_range_ids`` 等价, 保留为调用方对称便利）。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -122,27 +105,18 @@ class CitationCheckResult(BaseModel):
 
 
 class CitationChecker:
-    """Validate ``[id](CITE)`` markers in LLM response against citations list.
+    """校验 LLM 响应中的 ``[id](CITE)`` 标记是否对应 citations 列表。
 
-    Stateless: pass ``response`` + ``citations`` to ``check()``. Use in
-    pipeline post-gen step (after ``SearchResult.response`` is finalized)
-    or in eval / debug tools.
-
-    Example:
-        result = checker.check(
-            response="Paris [1](CITE) is the capital.",
-            citations=[Citation(...)],
-        )
-        if not result.valid:
-            log.warning(f"out-of-range markers: {result.out_of_range_ids}")
+    无状态: 把 ``response`` 与 ``citations`` 传给 ``check()``。可在管线
+    生成后阶段（``SearchResult.response`` 落定后）或 eval / 调试工具中使用。
     """
 
     def check(self, response: str, citations: list[Citation]) -> CitationCheckResult:
-        """Run full validation.
+        """执行完整校验。
 
         Returns:
-            CitationCheckResult with all discrepancies. ``valid=True`` only
-            when no out-of-range markers exist.
+            ``CitationCheckResult``, 包含全部差异; 仅当不存在越界标记时
+            ``valid`` 为 ``True``。
         """
         ids = parse_inline_citations(response)
         unique_ids = sorted(set(ids))
@@ -158,5 +132,5 @@ class CitationChecker:
             referenced_unique=unique_ids,
             out_of_range_ids=out_of_range,
             orphan_citation_indices=orphan,
-            unused_orphan_marker_ids=out_of_range,  # alias
+            unused_orphan_marker_ids=out_of_range,  # 与 out_of_range_ids 等价
         )

@@ -1,38 +1,10 @@
-"""Real RAGAS metrics (ragas>=0.3,<0.4) — v2 replacement for stubs.
+"""真实 RAGAS 指标 (ragas 0.3.9) 包装, 接口与 stub 对称。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` task 19:
+- ``faithfulness``: LLM-as-judge 校验 answer claim 是否在 context 中
+- ``answer_relevancy``: query/answer embedding 余弦相似度均值
+- ``context_precision``: 位置感知的 retrieved vs reference 精度
 
-> Real RAGAS `faithfulness` with custom LLM judge (task 19 ships a stub
-> for v2; see G-P0-2)
-
-This module wraps real ragas 0.3.9 metrics behind a clean callable
-interface that mirrors the stub API. Each metric takes the same args
-as the stub but returns the same ``0-1`` float range.
-
-Three metrics implemented (same names as stubs):
-- ``faithfulness_real``: LLM-as-judge checks answer claims all in context
-- ``answer_relevancy_real``: cosine(query_embed, answer_embed) averaged
-- ``context_precision_real``: position-aware precision of retrieved vs reference
-
-The ragas 0.3.9 API uses ``SingleTurnSample`` and ``single_turn_score``
-async method. Each metric needs an LLM (faithfulness) or embeddings
-(answer_relevancy, context_precision) initialized.
-
-Usage::
-
-    from rag.eval.ragas_real import RagasRealRunner
-
-    runner = RagasRealRunner(
-        llm=my_langchain_llm,
-        embeddings=my_langchain_embeddings,
-    )
-    scores = await runner.compute(
-        user_input="...",
-        response="...",
-        retrieved_contexts=["c1", "c2"],
-        reference="ground truth answer",
-    )
-    # scores = {"faithfulness": 0.85, "answer_relevancy": 0.72, ...}
+通过 ``SingleTurnSample`` + ``single_turn_score`` 异步接口计算。
 """
 
 from __future__ import annotations
@@ -55,13 +27,13 @@ logger = logging.getLogger(__name__)
 
 
 class LangChainLLM(Protocol):
-    """Minimal LangChain BaseChatModel interface for ragas wrapping."""
+    """供 ragas 包装的最小 LangChain ``BaseChatModel`` 接口。"""
 
     async def ainvoke(self, *args: object, **kwargs: object) -> object: ...
 
 
 class LangChainEmbeddings(Protocol):
-    """Minimal LangChain Embeddings interface."""
+    """最小 LangChain ``Embeddings`` 接口。"""
 
     async def aembed_query(self, text: str) -> list[float]: ...
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
@@ -69,22 +41,21 @@ class LangChainEmbeddings(Protocol):
 
 @dataclass
 class RagasRealRunner:
-    """Compute real RAGAS metrics over a single (query, answer, contexts) tuple.
+    """在单个 (query, answer, contexts) 样本上计算真实 RAGAS 指标。
 
-    Wraps ragas 0.3.9 metrics with a LangChain chat model (for faithfulness
-    LLM judge) and a LangChain embeddings model (for answer_relevancy +
-    context_precision).
+    使用 LangChain chat 模型驱动 faithfulness 的 LLM judge,
+    LangChain embeddings 驱动 answer_relevancy 与 context_precision。
 
     Args:
-        llm: LangChain ``BaseChatModel`` for LLM-judge metrics.
-        embeddings: LangChain ``Embeddings`` for embedding-based metrics.
+        llm: LangChain ``BaseChatModel``, 用于 LLM-judge 类指标。
+        embeddings: LangChain ``Embeddings``, 用于 embedding 类指标。
     """
 
     llm: LangChainLLM
     embeddings: LangChainEmbeddings
 
     def __post_init__(self) -> None:
-        """Bind LLM + embeddings to all metrics (ragas 0.3 requirement)."""
+        """将 LLM 与 embeddings 绑定到各指标 (ragas 0.3 要求)。"""
         wrapped_llm = LangchainLLMWrapper(self.llm)
         wrapped_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
 
@@ -96,7 +67,7 @@ class RagasRealRunner:
         self._answer_relevancy.embeddings = wrapped_embeddings
 
         self._context_precision = context_precision
-        # context_precision in ragas 0.3 is LLM-only (no embeddings attribute).
+        # ragas 0.3 中 context_precision 只需 LLM, 无 embeddings 字段。
         self._context_precision.llm = wrapped_llm
 
     async def compute(
@@ -107,11 +78,11 @@ class RagasRealRunner:
         retrieved_contexts: list[str],
         reference: str = "",
     ) -> dict[str, float]:
-        """Compute all 3 metrics for one sample.
+        """计算单个样本的 3 项指标。
 
-        Returns dict with keys: ``faithfulness``, ``answer_relevancy``,
-        ``context_precision``. Each value in ``[0, 1]``. Missing keys if
-        a metric raises (logged + skipped).
+        Returns:
+            ``{faithfulness, answer_relevancy, context_precision}`` 字典,
+            各值范围 ``[0, 1]``。指标异常时该键缺失 (记录 warning 后跳过)。
         """
         sample = SingleTurnSample(
             user_input=user_input,
@@ -127,11 +98,9 @@ class RagasRealRunner:
             ("context_precision", self._context_precision),
         ):
             try:
-                # cast: ragas types single_turn_score as returning Any (not
-                # Awaitable); narrow to Awaitable[float] so mypy accepts await.
-                score = await cast(
-                    Awaitable[Any], metric.single_turn_score(sample)
-                )
+                # cast: ragas 将 single_turn_score 标为返回 Any, 收窄为
+                # Awaitable[float] 以便 mypy 通过 await。
+                score = await cast(Awaitable[Any], metric.single_turn_score(sample))
                 out[name] = float(score)
             except Exception as e:
                 logger.warning(

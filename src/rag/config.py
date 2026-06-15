@@ -6,10 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class CacheSettings(BaseModel):
     query_ext_enabled: bool = False
-    l1_ttl: int = 86400  # L1 embedding：text→vector，默认 24h；模型切换时主动失效
-    l2_ttl: int = 1800  # L2 query extension：LLM 查询扩展，默认 30min
-    l3_ttl: int = 300  # L3 search：检索结果，默认 5min；chunk 变更时按 dataset 失效
-    l4_ttl: int = 3600  # L4 rerank：重排结果，默认 1h
+    l1_ttl: int = 86400  # L1 embedding: text→vector, 默认 24h; 模型切换时主动失效
+    l2_ttl: int = 1800  # L2 query extension: LLM 查询扩展, 默认 30min
+    l3_ttl: int = 300  # L3 search: 检索结果, 默认 5min; chunk 变更时按 dataset 失效
+    l4_ttl: int = 3600  # L4 rerank: 重排结果, 默认 1h
 
 
 class LaneSettings(BaseModel):
@@ -18,7 +18,7 @@ class LaneSettings(BaseModel):
 
 
 class LLMConcurrencySettings(BaseModel):
-    """按能力通道 (chat / embedding / rerank) 独立并发；rerank 未配置时为 None。"""
+    """按能力通道 (chat / embedding / rerank) 独立并发; rerank 未配置时为 None。"""
 
     chat: LaneSettings = LaneSettings(max_concurrent=4)
     embedding: LaneSettings = LaneSettings(max_concurrent=5)
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     @property
     def llm_concurrency(self) -> LLMConcurrencySettings:
-        """按能力通道构建并发配置；openai_max_concurrent 仅控制 chat。"""
+        """按能力通道构建并发配置; `openai_max_concurrent` 仅控制 chat。"""
         rerank_key = self.openai_rerank_api_key.get_secret_value()
         rerank_lane: LaneSettings | None = None
         if rerank_key:
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
 
 
 def sync_langsmith_env(app_settings: Settings) -> None:
-    """将 Settings 中的 LangSmith 字段写入 os.environ，供 LangChain/LangSmith SDK 读取。"""
+    """将 `Settings` 中的 LangSmith 字段写入 `os.environ`, 供 LangChain/LangSmith SDK 读取。"""
     os.environ["LANGSMITH_TRACING"] = (
         "true" if app_settings.langsmith_tracing else "false"
     )

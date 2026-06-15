@@ -17,10 +17,17 @@ logger = logging.getLogger(__name__)
 def read_file(path: str | Path) -> TextDoc:
     """本地文件 -> TextDoc。
 
+    Args:
+        path: 本地文件路径。
+
+    Returns:
+        解析后的 TextDoc。
+
     Raises:
-        RAGError(code=reader.not_found): 文件不存在
-        RAGError(code=reader.permission): 无读权限
-        RAGError(code=reader.unsupported): 后缀无对应 adapter
+        RAGError: ``code=reader.not_found`` — 文件不存在或非普通文件。
+        RAGError: ``code=reader.permission`` — 无读权限。
+        RAGError: ``code=reader.parse`` — 读盘 OSError。
+        RAGError: ``code=reader.unsupported`` — 后缀无对应 adapter。
     """
     p = Path(path)
     logger.debug("reader.file.start path=%s", p)

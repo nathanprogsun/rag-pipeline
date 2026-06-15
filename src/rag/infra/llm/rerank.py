@@ -1,3 +1,5 @@
+"""Rerank 模型工厂与协议定义。"""
+
 from typing import Protocol
 
 import httpx
@@ -9,13 +11,15 @@ _RERANK_PATH = "/reranks"
 
 
 class Reranker(Protocol):
+    """Rerank 协议。"""
+
     async def rerank(
         self,
         query: str,
         documents: list[str],
         top_k: int,
     ) -> list[tuple[int, float]]:
-        """返回 (doc_idx, score) 列表, 按 score 降序。"""
+        """对 `documents` 重新排序, 返回按 score 降序的 `(doc_idx, score)` 列表。"""
         ...
 
 
@@ -34,7 +38,7 @@ class _RerankErrorResponse(BaseModel):
 
 
 class QwenRerank:
-    """DashScope compatible-api qwen3-rerank (POST .../compatible-api/v1/reranks)。"""
+    """qwen3-rerank (DashScope compatible-api /reranks) 客户端。"""
 
     def __init__(
         self,
@@ -44,6 +48,15 @@ class QwenRerank:
         instruct: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        """初始化 QwenRerank 客户端。
+
+        Args:
+            api_key: DashScope API Key。
+            base_url: 兼容 API 根地址。
+            model: rerank 模型名。
+            instruct: 可选 instruct 指令。
+            client: 注入的 `httpx.AsyncClient`; 为 None 时每次调用自建。
+        """
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -56,6 +69,16 @@ class QwenRerank:
         documents: list[str],
         top_k: int,
     ) -> list[tuple[int, float]]:
+        """调用 rerank 接口并解析结果。
+
+        Args:
+            query: 查询文本。
+            documents: 候选文档原文列表。
+            top_k: 返回的最大条目数。
+
+        Returns:
+            按 score 降序的 `(原始下标, 相关性分数)` 列表。
+        """
         if not documents:
             return []
 
@@ -105,7 +128,7 @@ class QwenRerank:
 
 
 class NoOpRerank:
-    """Rerank 不可用时的兜底, 按输入顺序返回。"""
+    """Rerank 不可用时的兜底实现, 按输入顺序返回。"""
 
     async def rerank(
         self,
@@ -113,12 +136,20 @@ class NoOpRerank:
         documents: list[str],
         top_k: int,
     ) -> list[tuple[int, float]]:
+        """按输入顺序生成伪分数 (1.0 - i*0.01), 不调用任何上游。"""
         _ = query
         return [(i, 1.0 - i * 0.01) for i in range(min(top_k, len(documents)))]
 
 
 def get_rerank_model(model: str | None = None) -> QwenRerank:
-    """获取 qwen3-rerank 客户端。调用方通过 llm_sem.run(\"rerank\", ...) 进入限流。"""
+    """从 settings 构造 `QwenRerank` 客户端。
+
+    Args:
+        model: 模型名, 为 None 时使用 `settings.openai_rerank_model`。
+
+    Returns:
+        配置好的 `QwenRerank` 实例。
+    """
     return QwenRerank(
         api_key=settings.openai_rerank_api_key.get_secret_value(),
         base_url=settings.openai_rerank_base_url,
@@ -127,7 +158,14 @@ def get_rerank_model(model: str | None = None) -> QwenRerank:
 
 
 def get_reranker(model: str | None = None) -> Reranker:
-    """无 rerank API Key 时返回 NoOpRerank，否则返回 QwenRerank。"""
+    """根据 rerank API Key 是否配置, 返回真实客户端或 `NoOpRerank` 兜底。
+
+    Args:
+        model: 模型名, 仅在有 Key 时生效。
+
+    Returns:
+        满足 `Reranker` 协议的实现。
+    """
     if not settings.openai_rerank_api_key.get_secret_value():
         return NoOpRerank()
     return get_rerank_model(model=model)

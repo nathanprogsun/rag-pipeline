@@ -1,3 +1,5 @@
+"""Chat 模型工厂。"""
+
 import logging
 
 from langchain_core.runnables import Runnable
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 _LLM_TIMEOUT_SECONDS = 30.0
 
 # 支持 reasoning_split 的模型前缀。reasoning_split 是 OpenAI 兼容层 (DeepSeek 等)
-# 把 ``reasoning_content`` 分离到独立字段的开关, 只有 reasoning 模型才需要打开;
+# 把 `reasoning_content` 分离到独立字段的开关, 只有 reasoning 模型才需要打开;
 # 对普通 chat 模型传这个 extra_body 会污染请求体 / 触发上游 4xx。
 _REASONING_MODEL_PREFIXES: tuple[str, ...] = ("o1", "o3", "deepseek-reasoner")
 
@@ -28,9 +30,20 @@ def get_chat_model(
     base_url: str | None = None,
     api_key: str | None = None,
 ) -> ChatOpenAI:
-    """标准 chat model, OpenAI 协议。
+    """构造 `ChatOpenAI` 实例, reasoning 模型自动注入 `reasoning_split`。
 
-    默认 temperature=0.1; timeout=30s; max_retries=0 因已有 LLMSemaphore。
+    默认 `temperature=0.1`, `timeout=30s`; `max_retries=0` 因已有 `LLMSemaphore` 限流。
+
+    Args:
+        model: 模型名, 为 None 时使用 `settings.openai_model`。
+        temperature: 采样温度。
+        timeout: 单次请求超时秒数。
+        max_retries: 上层 SDK 重试次数。
+        base_url: 覆盖默认 base url。
+        api_key: 覆盖默认 API key。
+
+    Returns:
+        配置好的 `ChatOpenAI` 实例。
     """
     resolved_model = model or settings.openai_model
     if _is_reasoning_model(resolved_model):
@@ -63,7 +76,20 @@ def get_structured_chat_model(
     api_key: str | None = None,
     model: str | None = None,
 ) -> Runnable:
-    """带结构化输出能力的 chat model（LangChain tools + function_calling）。"""
+    """在基础 chat model 上叠加 `function_calling` 结构化输出。
+
+    Args:
+        schema: 输出 `BaseModel` schema。
+        temperature: 采样温度。
+        timeout: 单次请求超时秒数。
+        max_retries: 上层 SDK 重试次数。
+        base_url: 覆盖默认 base url。
+        api_key: 覆盖默认 API key。
+        model: 模型名, 为 None 时使用 `settings.openai_model`。
+
+    Returns:
+        可链式调用的结构化输出 `Runnable`。
+    """
     base = get_chat_model(
         model=model,
         temperature=temperature,

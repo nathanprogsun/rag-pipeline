@@ -21,11 +21,13 @@ AsyncSessionLocal = async_sessionmaker(
 
 async def close_pool() -> None:
     """长时间运行的服务应调用此函数释放连接池。
-    命名与 asyncpg pool 保持一致 (init_pool / close_pool)。"""
+
+    命名与 asyncpg pool 保持一致（``init_pool`` / ``close_pool``）。
+    """
     await engine.dispose()
 
 
 async def init_pool() -> None:
-    """自动建表。Production 用 Alembic 迁移。"""
+    """自动建表。生产环境推荐使用 Alembic 迁移。"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -1,21 +1,10 @@
-"""Query Extension: LLM rewrites query → N variants。
+"""Query Extension: LLM 改写 query → N variants。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 9 +
-FastGPT deep-alignment audit (2026-06-14):
-
-- ``QueryDecomposer`` **DROPPED** (per decision C; confirmed: FastGPT has no
-  equivalent)
-- ``QueryExtensionRunnable`` **aligns with FastGPT's queryExtension**:
-  1. Stage 1 — LLM rewrite via **structured output** (function_calling)
-     → ``QueryExtensionVariants`` Pydantic model, 免去 JSON parse err
-  2. Stage 2 — lazyGreedyQuerySelection: Jina submodular (α=0.3, k=3)
-  3. Stage 3 — string normalize dedup: hash after stripping non-letter/digit
-  4. Prepend original at index 0 (always preserved)
-
-FastGPT reference (NOT fabricated; verified 2026-06-14):
-  - ``packages/service/core/ai/functions/queryExtension.ts`` (307 lines)
-  - ``packages/service/core/ai/hooks/useTextCosine.ts`` (166 lines, ``lazyGreedyQuerySelection``)
-  - ``packages/service/core/dataset/search/utils.ts`` (string normalize dedup at L88-102)
+阶段流程:
+1. LLM 结构化输出 (``QueryExtensionVariants``) 生成候选检索词, 免 JSON 解析错误。
+2. Jina submodular lazy-greedy 选择 (α=0.3, k=3)。
+3. 字符串归一化去重 (剥离非字母数字字符后做哈希)。
+4. 在索引 0 位置前置原 query, 始终保留。
 """
 
 from __future__ import annotations
@@ -68,15 +57,15 @@ class _LangChainChatModel(Protocol):
 
 
 class QueryExtensionRunnable:
-    """N-way query rewrite via LLM, FastGPT-aligned.
+    """N 路 query 改写组件 (LLM 驱动)。
 
     Args:
-        model: Chat model name (default ``"MiniMax-M3"``).
-        generate_count: N variants to request from LLM (default 10, FastGPT).
-        k: Top-k for lazy-greedy selection (default 3, FastGPT).
-        alpha: Relevance weight in submodular gain (default 0.3, FastGPT).
-        llm: Optional pre-built structured-output LLM (for testing).
-        embedder: Optional embedder override (for testing).
+        model: Chat 模型名 (默认 ``"MiniMax-M3"``)。
+        generate_count: 请求 LLM 生成的 variants 数 (默认 10)。
+        k: lazy-greedy 选择的 top-k (默认 3)。
+        alpha: submodular 增益中相关性权重 (默认 0.3)。
+        llm: 可选预构建的结构化输出 LLM, 用于测试。
+        embedder: 可选 embedder 覆盖, 用于测试。
     """
 
     DEFAULT_MODEL: str = "MiniMax-M3"
@@ -152,7 +141,7 @@ class QueryExtensionRunnable:
         chat_bg: str = "",
         histories: list[str] | None = None,
     ) -> list[str]:
-        """Stage 1: LLM rewrites query → N variants via structured output."""
+        """阶段 1: LLM 通过结构化输出改写 query, 返回 N 个 variants。"""
         histories = histories or []
         user_prompt = self.REWRITE_USER_PROMPT.format(
             count=self.generate_count,
@@ -189,7 +178,7 @@ class QueryExtensionRunnable:
         original: str,
         candidates: list[str],
     ) -> list[str]:
-        """Stage 2: FastGPT-style lazy-greedy submodular selection (Jina)."""
+        """阶段 2: Jina submodular lazy-greedy 选择。"""
         if len(candidates) <= self.k:
             return list(candidates)
 
@@ -224,7 +213,7 @@ class QueryExtensionRunnable:
         return [candidates[i] for i in selected_idx]
 
     def string_normalize_dedup(self, queries: list[str]) -> list[str]:
-        """Stage 3: dedup by normalized hash."""
+        """阶段 3: 按归一化哈希去重。"""
         seen: set[str] = set()
         out: list[str] = []
         for q in queries:
@@ -263,12 +252,12 @@ class QueryExtensionRunnable:
 
 
 def _normalize_for_dedup(text: str) -> str:
-    """Strip non-letter/non-digit chars, lower-case, for dedup hash."""
+    """剥离非字母数字字符并转小写, 用于去重哈希。"""
     return re.sub(r"[^\w]+", "", text, flags=re.UNICODE).lower()
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Pure-Python cosine similarity."""
+    """纯 Python 余弦相似度。"""
     if len(a) != len(b) or not a:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))
@@ -286,7 +275,7 @@ def _marginal_gain(
     selected_vecs: list[list[float]],
     alpha: float,
 ) -> float:
-    """Jina submodular gain: α·relevance + (1-α)·diversity."""
+    """Jina submodular 增益: α · 相关性 + (1-α) · 多样性。"""
     relevance = _cosine_similarity(cand_vec, orig_vec)
     if not selected_vecs:
         diversity = 1.0

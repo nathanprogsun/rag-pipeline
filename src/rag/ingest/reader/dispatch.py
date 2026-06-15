@@ -1,23 +1,4 @@
-"""Reader dispatch: bytes + extension -> TextDoc, 补 DocMeta.
-
-对齐  ``readFile/index.ts`` 的 6 handler 设计:
-  - 仅支持 txt / md / html / pdf / docx / pptx / csv / xlsx (8 个, md + htm 是 html alias)
-  - 不支持 json
-  - 未知 ext 抛 ``RAGError(code=READER_UNSUPPORTED)`` 含 "only support" 提示
-
-入口: ``dispatch_bytes`` 是 ``async def``, 所有 8 个 adapter 都是 ``async`` Protocol,
-调用方:
-  - 同步入口 (read_file) → ``asyncio.run(dispatch_bytes(...))``
-  - 异步入口 (read_url) → ``await dispatch_bytes(...)``
-
-设计要点:
-  - 全部 8 个 adapter 统一 ``async def``, ``dispatch`` 直接 ``await`` (移除
-    ``inspect.iscoroutine`` 反射分支 + ``_call_adapter``)。
-  - dict value 类型用 ``AsyncFormatAdapter`` (``Callable[..., Awaitable[FormatReaderResult]]``)
-    直接标注, 不再依赖 ``FormatAdapter`` Protocol 的 ``__call__`` + sync/async 探测。
-  - ``upload_file`` 传递: xlsx 不需要 ``upload_file`` (无内嵌图抽取),
-    仅用 ``inspect.signature`` 探测单参数缺失并降级, 不再依赖返回值同步/异步判断。
-"""
+"""Reader dispatch: bytes + extension -> TextDoc, 补 DocMeta."""
 
 from __future__ import annotations
 
@@ -72,20 +53,23 @@ async def dispatch_bytes(
     filename: str | None = None,
     upload_file: UploadFileHandler | None = None,
 ) -> TextDoc:
-    """按 extension 路由到 AsyncFormatAdapter, 构造 TextDoc.
+    """按 extension 路由到 AsyncFormatAdapter, 构造 TextDoc。
 
     Args:
         buffer: 二进制内容 (path 读的或 url 拉的)
         extension: 后缀 (无 `.` 前缀, 已 lowercase)
         source: 来源标识 ('file:///abs/path' 或 'https://...')
         encoding: 文本类 adapter 的字符编码
-        datasource: 'file' | 'url' (来自 rag.domain.enums.IngestDatasource)
+        datasource: 'file' | 'url' (来自 `rag.domain.enums.IngestDatasource`)
         filename: 展示用文件名
         upload_file: 可选, async 上传回调 (docx 内嵌图, html base64 图)
 
     Returns:
         TextDoc { text=raw_text, format_text=adapter.format_text or None,
                  meta=full DocMeta, images=[...] }
+
+    Raises:
+        RAGError: ``code=reader.unsupported`` — 后缀无对应 adapter。
     """
     ext = extension.lower().lstrip(".")
     adapter = EXTENSION_ADAPTERS.get(ext)
@@ -129,7 +113,7 @@ async def dispatch_bytes(
 
 
 def filename_from_url(url: str) -> str:
-    """从 URL 提取展示用文件名 (netloc + path)."""
+    """从 URL 提取展示用文件名 (netloc + path)。"""
     parsed = urlparse(url)
     return (parsed.netloc + parsed.path) or url
 

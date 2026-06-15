@@ -1,36 +1,22 @@
-"""PDF 文本后处理: 简化版 (文本特征).
+"""PDF 文本后处理: 简化版 (文本特征)。
 
-对齐参考:
- - 11 个参数: trim_page_edge / header_ratio / footer_ratio / line_y_ratio /
-   min_space_gap_ratio / wide_space_gap_ratio / merge_visual_lines /
-   remove_repeated_page_noise / repeated_noise_min_count /
-   repeated_noise_max_length / drop_pure_page_number / normalize_unicode.
- - 核心算法: 按 y 聚类成行 → 行内按 x 排序 → gap 决定空格 → CJK 规则 →
-   过滤页眉页脚 → 删重复噪声 → 删纯页码 → 合并视觉换行.
+输入格式: ``pages: list[str]`` (每页纯文本) 而非 ``list[dict]`` with
+textItems; 与 ``pypdf.Page.extract_text()`` 输出对齐。
 
-**本模块采用简化版实现**, 与 严格版 1:1 对齐需要 char-level 坐标
-(``pdfplumber`` 抽坐标后复刻), 工作量大且不阻塞本 phase 价值. 简化版要点:
+本模块采用简化版实现, 与严格 1:1 对齐需要 char-level 坐标
+(``pdfplumber`` 抽坐标后复刻), 工作量大且不阻塞当前价值。简化版要点:
+ - 页眉/页脚检测: 文本特征 — 连续 ``repeated_noise_min_count`` 页有相同首行/末行 → 标记为 noise
+ - 重复行删除: 跨所有 page, ``text.strip()`` 出现次数 ≥ ``repeated_noise_min_count``
+   且长度 ≤ ``repeated_noise_max_length`` 的行全删
+ - 纯页码删除: ``^(\d+|-\s*\d+\s*-|\d+\s*/\s*\d+|Page\s+\d+|-\s*\d+\s*-)$``
+ - 合并视觉换行: 段末标点 (``.。!?``) 不合并, bullet 行 (以 ``-`` / ``*`` / 数字 ``.`` 开头)
+   不合并, 段间空行不合并, 其他情况下后续行直接接到上一行末尾
+ - ``normalize_unicode``: ``unicodedata.normalize('NFKC', text)``
+ - 段落分隔: ``\\n\\n`` 分段, ``\\n`` 行内, 末尾保留 ``\\n``
 
- - **输入格式**: ``pages: list[str]`` (每页纯文本) 而非 ``list[dict]`` with
-   textItems; 与 ``pypdf.Page.extract_text()`` 输出对齐.
- - **页眉/页脚检测**: 文本特征 — 连续 ``repeated_noise_min_count`` 页有
-   相同首行/末行 → 标记为 noise; 用 y 坐标判定, 简化版用文本特征等价.
- - **重复行删除**: 跨所有 page, ``text.strip()`` 出现次数 ≥
-   ``repeated_noise_min_count`` 且长度 ≤ ``repeated_noise_max_length`` 的行
-   全删. 同语义.
- - **纯页码删除**: ``^(\\d+|-\\s*\\d+\\s*-|\\d+\\s*/\\s*\\d+|Page\\s+\\d+|-\\s*\\d+\\s*-)$``
-   与 严格一致.
- - **合并视觉换行**: 与 同语义 — 段末标点 (``.。!?``) 不合并, bullet
-   行 (以 ``-`` / ``*`` / 数字 ``.`` 开头) 不合并, 段间空行不合并, 其他情况
-   下后续行直接接到上一行末尾.
- - **normalize_unicode**: ``unicodedata.normalize('NFKC', text)``,
-   调用 ``unorm.nfkc``.
- - **段落分隔**: ``\\n\\n`` 分段, ``\\n`` 行内, 末尾保留 ``\\n``.
-
-NOTE: Section 7.5 strict 1:1 alignment deferred. 用 ``pdfplumber`` 复刻时,
-11 个参数全部启用; 当前用 pypdf 抽纯文本, 只用其中 4 个有意义的参数
-(repeated_noise_min_count, repeated_noise_max_length, drop_pure_page_number,
-normalize_unicode). 其余 7 个参数保留签名仅为对齐.
+NOTE: 11 个参数中, 当前简化版实际用到的只有 4 个
+(`repeated_noise_min_count`, `repeated_noise_max_length`, `drop_pure_page_number`,
+`normalize_unicode`); 其余 7 个参数保留签名仅为对齐。
 """
 
 from __future__ import annotations
@@ -82,24 +68,26 @@ def postprocess_lite_parse_pages(
     drop_pure_page_number: bool = True,
     normalize_unicode: bool = False,
 ) -> str:
-    """PDF 文本后处理.
+    """PDF 文本后处理。
 
     Args:
-        pages: 每页纯文本 (例如 ``pypdf.Page.extract_text()`` 输出).
-        trim_page_edge: 保留签名, 简化版默认 ``True`` 时裁掉每页首尾空行.
-        header_ratio / footer_ratio: 保留签名, 简化版用文本首末行等价语义.
-        line_y_ratio / min_space_gap_ratio / wide_space_gap_ratio: 保留签名,
-            简化版无 x/y 坐标, 这三个参数无效果.
-        merge_visual_lines: 是否合并视觉换行 (段末标点 / bullet / 空行不合并).
-        remove_repeated_page_noise: 是否删除跨页重复出现的行.
-        repeated_noise_min_count: 重复行最小出现次数 (≥ 该值才视为 noise).
+        pages: 每页纯文本 (例如 ``pypdf.Page.extract_text()`` 输出)。
+        trim_page_edge: 保留签名, 简化版默认 ``True`` 时裁掉每页首尾空行。
+        header_ratio: 保留签名, 简化版用文本首末行等价语义。
+        footer_ratio: 保留签名, 简化版用文本首末行等价语义。
+        line_y_ratio: 保留签名, 简化版无 x/y 坐标, 无效果。
+        min_space_gap_ratio: 保留签名, 简化版无 x/y 坐标, 无效果。
+        wide_space_gap_ratio: 保留签名, 简化版无 x/y 坐标, 无效果。
+        merge_visual_lines: 是否合并视觉换行 (段末标点 / bullet / 空行不合并)。
+        remove_repeated_page_noise: 是否删除跨页重复出现的行。
+        repeated_noise_min_count: 重复行最小出现次数 (≥ 该值才视为 noise)。
         repeated_noise_max_length: 重复行最大长度 (噪声通常是短字符串如 ``1`` /
-            ``第 1 页``).
-        drop_pure_page_number: 是否删除纯页码行 (匹配 ``^\\d+$`` 等).
-        normalize_unicode: 是否对结果做 ``NFKC`` 归一化 (全角转半角等).
+            ``第 1 页``)。
+        drop_pure_page_number: 是否删除纯页码行 (匹配 ``^\\d+$`` 等)。
+        normalize_unicode: 是否对结果做 ``NFKC`` 归一化 (全角转半角等)。
 
     Returns:
-        后处理后的整篇文本: 段间 ``\\n\\n``, 末尾保留 ``\\n``.
+        后处理后的整篇文本: 段间 ``\\n\\n``, 末尾保留 ``\\n``。
     """
     if not pages:
         return ""
@@ -159,7 +147,7 @@ def postprocess_lite_parse_pages(
 
 
 def _trim_page_lines(page_text: str) -> list[str]:
-    """裁掉每页首尾空行, 等价于 ``trim_page_edge=True`` 的坐标裁剪."""
+    """裁掉每页首尾空行, 等价于 ``trim_page_edge=True`` 的坐标裁剪。"""
     lines = page_text.split("\n")
     # 跳过前导空行
     start = 0
@@ -178,7 +166,7 @@ def _find_repeated_lines(
     min_count: int,
     max_length: int,
 ) -> set[str]:
-    """统计跨所有 page 出现 ≥ ``min_count`` 次, 长度 ≤ ``max_length`` 的行."""
+    """统计跨所有 page 出现 ≥ ``min_count`` 次, 长度 ≤ ``max_length`` 的行。"""
     counts: dict[str, int] = {}
     for lines in pages_lines:
         for line in lines:
@@ -196,7 +184,7 @@ def _is_noise_line(
     noise_lines: set[str],
     drop_pure_page_number: bool,
 ) -> bool:
-    """判断单行是否为 noise (跨页重复行 / 纯页码)."""
+    """判断单行是否为 noise (跨页重复行 / 纯页码)。"""
     if stripped in noise_lines:
         return True
     if drop_pure_page_number and _PURE_PAGE_NUMBER_RE.match(stripped):
@@ -205,7 +193,7 @@ def _is_noise_line(
 
 
 def _merge_visual_lines(lines: list[str]) -> list[str]:
-    """合并视觉换行: 段末标点 / bullet / 段间空行不合并, 其他接续.
+    """合并视觉换行: 段末标点 / bullet / 段间空行不合并, 其他接续。
 
     规则:
     - 空行: 保留作为段间分隔
@@ -213,8 +201,8 @@ def _merge_visual_lines(lines: list[str]) -> list[str]:
     - 上一行以段末标点结尾 (``。.!?``): 保留独立, 不与下一行合并
     - 其他: 后续行直接接续
 
-    简化说明: 严格版用 ``\\n`` 拼接行, 简化版用 `` `` 拼接.
-    差异在视觉; 后续 chunker 不依赖行内 ``\\n``, 仅依赖段间 ``\\n\\n``.
+    简化说明: 严格版用 ``\\n`` 拼接行, 简化版用 `` `` 拼接。
+    差异在视觉; 后续 chunker 不依赖行内 ``\\n``, 仅依赖段间 ``\\n\\n``。
     """
     if not lines:
         return lines
@@ -256,7 +244,7 @@ def _merge_visual_lines(lines: list[str]) -> list[str]:
 
 
 def _join_pages(pages_lines: Iterable[list[str]]) -> str:
-    """多页 → 单字符串: 段间 ``\\n\\n``, 末尾保留 ``\\n``.
+    """多页 → 单字符串: 段间 ``\\n\\n``, 末尾保留 ``\\n``。
 
     处理流程:
     1. 把每页的 ``list[str]`` 压平成单字符串 (行间 ``\\n``)

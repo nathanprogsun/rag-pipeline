@@ -1,35 +1,21 @@
 """HTML → markdown 转换器。
 
-契约:
+要点:
+ - 引擎: `markdownify` (`Turndown` 在 Python 端的最近似实现)
+ - 删除标签: `i` / `script` / `iframe` / `style`
+ - 媒体 (`video` / `source` / `audio`) → `[src](src)`, 优先自身 src, 否则第一个 `<source>` 的 src
+ - base64 图片预处理:
+   - 有 `upload_file`: 异步并发上传 (Semaphore=5) 拿 key, 替换 src
+   - 无 `upload_file`: src 置空, 避免大体积 base64 进入 markdown
+ - 超大 HTML: `len(html) > MAX_HTML_TRANSFORM_CHARS` → 原样返回
+ - 异常处理:
+   - 单图 base64 上传失败 → 单图降级 (空 src), 不影响其他图与正文
+   - 整个转换抛错 + 无 `upload_file` → log warning + 返回 ``""``
+   - 整个转换抛错 + 有 `upload_file` → 异常向上抛 (RAGError 由上层 wrap)
 
- 3.1 引擎: markdownify (Turndown 在 Python 端的最近似实现)
- 3.2 Turndown 配置: heading ATX / bullet '-' / fenced code / em '_' / strong '**' / inline link
- 3.3 删除标签: i / script / iframe / style
- 3.4 媒体: video / source / audio → `[src](src)`, 优先自身 src, 否则第一个 <source> 的 src
- 3.5 base64 图片预处理:
- - 有 upload_file: 异步并发上传 (Semaphore=5) 拿 key, 替换 src
- - 无 upload_file: src 置空, 避免大体积 base64 进入 markdown
- 3.6 超大 HTML: `len(html) > MAX_HTML_TRANSFORM_CHARS` → 原样返回
- 3.7 后处理 `simple_markdown_text`: 实体反转义、链接内换行归一、空白折叠
- 3.8 异常处理:
- - 单图 base64 上传失败 → 单图降级 (空 src), 不影响其他图与正文
- - 整个转换抛错 + 无 upload_file → log warning + 返回 ``""``
- - 整个转换抛错 + 有 upload_file → 异常向上抛 (RAGError 由上层 wrap)
-
-设计:
- - **async 签名**: ``html_to_md`` 是 coroutine, base64 上传直接 ``await``,
-   不再嵌套 ``asyncio.run``, 与上层 async adapter (html / docx) 一致。
- - 媒体规则在 markdownify 之前用 BeautifulSoup 预扫描, 把 <video>/<source>/<audio>
- 替换成 markdownify 友好的 <a> 节点 (markdownify 无原生 media rule)
- - base64 上传并发由 `asyncio.Semaphore(5)` 控制, `asyncio.gather` 一次性触发
-
-注意:
- - markdownify 的 `strong_em_symbol` 同时控制 strong 和 em, 不能分别给 `_` / `**`;
- Turndown 的 `em_delimiter="_"` + `strong_delimiter="**"` 在 markdownify 端
- 通过 `strong_em_symbol` + 后处理 `__x__` → `**x**` 还原模拟。
- - 本模块被 ``reader/extensions/html.py`` 与 ``reader/extensions/docx.py`` 复用;
- 二者均为 async, 直接 ``await html_to_md(...)`` 即可。
-
+`markdownify` 的 `strong_em_symbol` 同时控制 strong 和 em, 不能分别给 `_` / `**`。
+本模块先用 `_` 让 `markdownify` 输出 `__x__` 形式, 再在后处理阶段把
+`__x__` 还原为 `**x**`。
 """
 
 from __future__ import annotations
@@ -48,13 +34,13 @@ from rag.ingest.reader.types import UploadedFileResult, UploadFileHandler
 
 logger = logging.getLogger(__name__)
 
-# Section 3.6: 超大 HTML 直接原样返回, 不走 markdownify
+# 超大 HTML 直接原样返回, 不走 markdownify
 MAX_HTML_TRANSFORM_CHARS: Final[int] = 1_000_000
 
-# Section 3.5: base64 图片上传并发度
+# base64 图片上传并发度
 _BASE64_UPLOAD_CONCURRENCY: Final[int] = 5
 
-# Section 3.5: 匹配 `<img ... src=("|')data:<mime>;base64,<data>\1 ...>`
+# 匹配 `<img ... src=("|')data:<mime>;base64,<data>\1 ...>`
 _BASE64_SRC_RE: Final[re.Pattern[str]] = re.compile(
     r"""\bsrc\s*=\s*(["'])data:([^;]+);base64,([A-Za-z0-9+/=]+)\1""",
     re.IGNORECASE,
@@ -79,38 +65,34 @@ async def html_to_md(
     """HTML 字符串 → markdown 字符串 (async)。
 
     Args:
-        html: 输入 HTML (可能含 base64 图片、media 标签、script 等)
+        html: 输入 HTML (可能含 base64 图片、media 标签、script 等)。
         upload_file: 可选异步上传回调, 签名 `(filename, mime, bytes) -> {"key": str}`。
             传 None 时 base64 图片 src 会被置空 (避免大体积 base64 进入 markdown)。
 
     Returns:
-        转换后的 markdown; 失败 (无 upload_file) 返回 `""`; 超大 HTML 原样返回。
-        失败且有 upload_file 时, 异常向上抛。
-
-    契约见模块 docstring 的 8 节 (Section 3.1-3.8)。
+        转换后的 markdown; 失败 (无 `upload_file`) 返回 `""`; 超大 HTML 原样返回。
+        失败且有 `upload_file` 时, 异常向上抛。
     """
     if not html:
         return ""
 
-    # Section 3.6: 超大直接返回原 HTML
+    # 超大直接返回原 HTML
     if len(html) > MAX_HTML_TRANSFORM_CHARS:
         return html
 
     try:
-        # Section 3.5: base64 图片预处理 (上传 or 清空 src) — async await
+        # base64 图片预处理 (上传 or 清空 src) — async await
         processed = await _process_base64_images(html, upload_file=upload_file)
 
-        # Section 3.3: 删除 i / script / iframe / style
-        # Section 3.4: 媒体 (video/source/audio) → <a href="src">src</a>
+        # 删除 i / script / iframe / style; media → <a href="src">src</a>
         processed = _preprocess_media_and_strip(processed)
 
-        # Section 3.1 + 3.2: markdownify 转换
+        # markdownify 转换
         md = _run_markdownify(processed)
 
-        # Section 3.7: 后处理
+        # 后处理
         return simple_markdown_text(md)
     except Exception as e:
-        # Section 3.8
         if upload_file is not None:
             raise
         logger.warning("html_to_md failed (no upload_file, returning ''): %s", e)
@@ -118,7 +100,7 @@ async def html_to_md(
 
 
 # ---------------------------------------------------------------------------
-# Section 3.5: base64 图片预处理
+# base64 图片预处理
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +112,7 @@ async def _process_base64_images(
     """把 `<img src="data:...;base64,...">` 替换为上传后的 key (或空 src)。
 
     替换粒度是 `src="..."` 整个属性, 不动其他属性 (alt / class / etc);
-    避免重复解码整个 base64, 直接复用正则捕获的 base64Data。
+    避免重复解码整个 base64, 直接复用正则捕获的 base64 data。
     """
     matches = list(_BASE64_SRC_RE.finditer(html))
     if not matches:
@@ -186,7 +168,7 @@ async def _upload_base64_concurrent(
 
 
 # ---------------------------------------------------------------------------
-# Section 3.3 + 3.4: 标签删除 + 媒体重写
+# 标签删除 + 媒体重写
 # ---------------------------------------------------------------------------
 
 _STRIP_TAGS: Final[tuple[str, ...]] = ("i", "script", "iframe", "style")
@@ -194,7 +176,7 @@ _MEDIA_TAGS: Final[tuple[str, ...]] = ("video", "source", "audio")
 
 
 def _resolve_media_src(node: Tag) -> str | None:
-    """Section 3.4: video/audio 先看自身 src, 否则取第一个 <source> 的 src。"""
+    """video/audio 先看自身 src, 否则取第一个 `<source>` 的 src。"""
     raw_src = node.get("src")
     src = cast("str | None", raw_src)
     if src:
@@ -209,7 +191,7 @@ def _resolve_media_src(node: Tag) -> str | None:
 
 
 def _preprocess_media_and_strip(html: str) -> str:
-    """Section 3.3 删标签 + Section 3.4 media → `<a href="src">src</a>`。"""
+    """删标签 + media → `<a href="src">src</a>`。"""
     soup = BeautifulSoup(html, "html.parser")
 
     for tag in soup.find_all(_STRIP_TAGS):
@@ -228,16 +210,16 @@ def _preprocess_media_and_strip(html: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Section 3.1 + 3.2: markdownify 包装
+# markdownify 包装
 # ---------------------------------------------------------------------------
 
 
 def _run_markdownify(html: str) -> str:
-    """Section 3.1+3.2: 调 markdownify, 配置对齐 Turndown 选项。
+    """调 `markdownify`, 配置对齐 `Turndown` 选项。
 
-    markdownify 用 `strong_em_symbol` 同时控制 strong 和 em, 无法分别给 '_' 和 '**';
-    选用 '_' 然后在 simple_markdown_text 阶段把 `__x__` (markdownify 的 strong)
-    还原为 `**x**` (Turndown 的 strong_delimiter), em `_x_` 保持不变。
+    `markdownify` 用 `strong_em_symbol` 同时控制 strong 和 em, 无法分别给
+    '_' 和 '**'; 选用 '_' 然后在 `simple_markdown_text` 阶段把 `__x__`
+    还原为 `**x**`, em `_x_` 保持不变。
     """
     return _md(
         html,
@@ -253,7 +235,7 @@ def _run_markdownify(html: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Section 3.7: 后处理 simple_markdown_text
+# 后处理 simple_markdown_text
 # ---------------------------------------------------------------------------
 
 _ESCAPED_MD_CHARS: Final[re.Pattern[str]] = re.compile(r"""\\([#`!*()+\-_\[\]{}\\.])""")
@@ -264,7 +246,7 @@ _LINK_NEWLINE_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 # markdownify 在 strong_em_symbol='_' 时把 <strong> 输出为 `__x__`,
-# 还原为 Turndown 的 strong_delimiter='**' 形式
+# 还原为 strong_delimiter='**' 形式
 _DOUBLE_UNDERSCORE_PAIR: Final[re.Pattern[str]] = re.compile(
     r"(?<!\w)__([^_\n][^_\n]*?[^_\n]|\S)__(?!\w)"
 )
@@ -276,7 +258,7 @@ def simple_markdown_text(raw: str) -> str:
     步骤:
         1. 实体反转义 (e.g. `&amp;` → `&`)
         2. 链接 `[text](url)` 内 text 的换行归一为空格
-        3. 把 markdownify 的 `__strong__` 还原为 `**strong**`
+        3. 把 `markdownify` 的 `__strong__` 还原为 `**strong**`
         4. 反转义误转义的 markdown 元字符 (e.g. `\\#` → `#`)
         5. 折叠多余空白
         6. 收尾 trim

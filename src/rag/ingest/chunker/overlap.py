@@ -1,12 +1,4 @@
-"""Overlap 倒序累积。
-
-策略:
-  1. 末段文本按 step 规则 hit 处切分
-  2. 倒序遍历切分结果, 累积至 ≤ overlap_len
-  3. 硬上限 max_overlap_len (= chunk_size * 0.4)
-  4. 若单片段超过 max, 切片到 overlap_len (无法再细切)
-  5. 字符切片按 valid_len 反向定位, 避免 Unicode 边界切坏
-"""
+"""按 step 规则倒序累积 overlap 片段。"""
 
 from __future__ import annotations
 
@@ -17,7 +9,15 @@ from .utils import valid_len
 
 
 def _split_by_step_rule(text: str, step: int) -> list[str]:
-    """按 STEPS[step] 的正则切分, 过滤空段。"""
+    """按 `STEPS[step]` 的正则切分, 过滤空段。
+
+    Args:
+        text: 待切分文本。
+        step: 规则索引, 越界则原样返回。
+
+    Returns:
+        非空片段列表。
+    """
     if step >= len(STEPS):
         return [text]
     rule_reg = STEPS[step].reg
@@ -26,7 +26,17 @@ def _split_by_step_rule(text: str, step: int) -> list[str]:
 
 
 def _char_offset_from_valid(text: str, valid_budget: int) -> int:
-    """从 text 末尾往前数 valid_budget 个有效字符, 返回对应 char offset。"""
+    """从文本末尾反向定位, 找到包含 ``valid_budget`` 个有效字符的字符偏移。
+
+    之所以按 `valid_len` 反向数, 是为了避免在 Unicode 边界切坏。
+
+    Args:
+        text: 原始文本。
+        valid_budget: 目标有效字符数 (空白不计)。
+
+    Returns:
+        起始字符偏移。
+    """
     if valid_budget <= 0:
         return len(text)
     count = 0
@@ -45,7 +55,18 @@ def get_overlap_tail(
     overlap_len: int,
     max_overlap_len: int,
 ) -> str:
-    """返回 text 末尾的 overlap 片段, 长度按 valid_len 控制。"""
+    """从文本末尾提取 overlap 片段, 长度受 `valid_len` 控制。
+
+    Args:
+        text: 源文本。
+        step: 当前 step, 用于选择切分正则。
+        chunk_size: 配置的 chunk 大小。
+        overlap_len: 目标 overlap 有效字符数。
+        max_overlap_len: overlap 的硬上限 (通常为 ``chunk_size * 0.4``)。
+
+    Returns:
+        倒序累积得到的 overlap 字符串; 越界或 `overlap_len <= 0` 时返回空串。
+    """
     if step >= len(STEPS) or overlap_len <= 0:
         return ""
 
@@ -53,7 +74,7 @@ def get_overlap_tail(
     overlap_text = ""
 
     for piece in reversed(pieces):
-        # 如果单片段本身就 > max, 直接切片到 overlap_len (无法细切)
+        # 单片段超过上限, 无法再细切, 直接按有效字符数截断。
         if valid_len(piece) > max_overlap_len:
             offset = _char_offset_from_valid(piece, overlap_len)
             return piece[offset:]
@@ -62,7 +83,7 @@ def get_overlap_tail(
         cand_valid = valid_len(candidate)
 
         if cand_valid > overlap_len:
-            # 已累积的 overlap_text 在范围内, 加上这块就超, 返回已累积
+            # 加上当前片段会超, 返回已累积部分。
             return overlap_text
 
         overlap_text = candidate

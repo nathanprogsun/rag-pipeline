@@ -1,24 +1,8 @@
-"""build_search_pipeline per Contract 3.
+"""``build_search_pipeline`` 工厂函数与类型化依赖注入。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 3:
-
-Typed I/O contract:
-    SearchPipelineDeps (Pydantic frozen) → typed dependency injection
-    Pipeline (Protocol) → exposes .ainvoke(SearchRequest) -> SearchResult
-    build_search_pipeline(deps) → Pipeline
-
-Wires components across search subpackages:
-- SearchSubgraph (per dataset_id) using VectorRetriever + FulltextRetriever
-- SearchPipeline with all stage callbacks
-- RerankStageAdapter if rerank_client provided
-- SimpleCite for citation list construction
-- NoOpParentDoc (real ParentDocExpander requires session_factory refactor)
-- LLM-based gen via make_llm_gen
-- AuditTap writing NDJSON when ``req.audit=True``
-
-Public API:
-    SearchPipelineDeps: typed Pydantic deps
-    Pipeline: Protocol for the public surface
+公共 API:
+    SearchPipelineDeps: 类型化 Pydantic 依赖
+    Pipeline: 公共接口协议
     build_search_pipeline(deps) -> Pipeline
 """
 
@@ -47,11 +31,11 @@ from rag.search.retrieve.subgraph import SearchSubgraph
 logger = logging.getLogger(__name__)
 
 
-# ---------- Protocol contracts ----------
+# ---------- Protocol 契约 ----------
 
 
 class Pipeline(Protocol):
-    """Typed pipeline per Contract 3. ``ainvoke(SearchRequest) -> SearchResult``."""
+    """类型化 pipeline: ``ainvoke(SearchRequest) -> SearchResult``。"""
 
     async def ainvoke(self, req: SearchRequest) -> SearchResult: ...
 
@@ -60,15 +44,12 @@ class Pipeline(Protocol):
 
 
 class SearchPipelineDeps(BaseModel):
-    """Typed dependency injection for the search pipeline (Contract 3).
+    """类型化依赖注入 (frozen Pydantic)。
 
-    All fields are explicit and required-or-defaulted; no dict-bag.
-    Frozen Pydantic model → safe to share across threads / coroutines.
-
-    Note: embedder / llm / rerank_client / audit_tap are typed as ``Any``
-    because Pydantic v2 can't generate schemas for LangChain classes or
-    runtime Protocols. The Protocol classes in generate/answer.py
-    document the contract; callers must satisfy them via duck typing.
+    所有字段显式声明, 无 dict-bag, 跨线程 / 协程安全。
+    ``embedder`` / ``llm`` / ``rerank_client`` / ``audit_tap`` 标注为 ``Any``,
+    因为 Pydantic v2 无法为 LangChain 类或 runtime Protocol 生成 schema;
+    实际契约由各 stage 的 Protocol 类定义, 调用方以 duck typing 满足。
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -78,7 +59,7 @@ class SearchPipelineDeps(BaseModel):
     rerank_client: Any | None = None
     audit_tap: Any | None = None
 
-    # Tunable weights (with sensible defaults)
+    # 可调权重 (带合理默认值)
     vector_weight: float = 0.7
     fulltext_weight: float = 0.3
     rrf_k: int = DEFAULT_RRF_K
@@ -92,12 +73,12 @@ class SearchPipelineDeps(BaseModel):
 
 @dataclass
 class _SearchPipelineImpl:
-    """Internal Pipeline implementation."""
+    """内部 Pipeline 实现。"""
 
     deps: SearchPipelineDeps
 
     def _build_search_pipeline(self, req: SearchRequest) -> SearchPipeline:
-        """Construct per-request SearchPipeline (subgraphs depend on request)."""
+        """按请求构造 SearchPipeline (subgraph 依赖请求中的 dataset_ids)。"""
         subgraphs: dict[uuid.UUID, SearchSubgraph] = {}
         for ds_id in req.dataset_ids:
             subgraphs[ds_id] = SearchSubgraph(
@@ -141,23 +122,17 @@ class _SearchPipelineImpl:
 
 
 def build_search_pipeline(deps: SearchPipelineDeps) -> Pipeline:
-    """Build a typed Pipeline per Contract 3.
+    """装配类型化 Pipeline。
 
-    Wires all stages:
-    - Stage 2: SearchSubgraph per dataset (vector + fulltext retriever)
-    - Stage 3/6: intra_fusion via SearchPipeline
-    - Stage 4-5: RerankStageAdapter if rerank_client set, else NoOpRerankStage
-    - Stage 7: filter (via orchestrator, default thresholds)
-    - Stage 8: NoOpParentDoc
-    - Stage 9: SimpleCite (1-based numbering)
-    - Stage 10: make_llm_gen (LLM call with citation instruction)
-    - Audit: AuditTap.record when req.audit=True
+    组装各 stage: SearchSubgraph (per dataset), RerankStageAdapter
+    (或 NoOp), filter, NoOpParentDoc, SimpleCite, make_llm_gen,
+    以及 ``req.audit=True`` 时的 AuditTap 写入。
 
     Args:
-        deps: SearchPipelineDeps with embedder, llm, optional rerank_client
-            and audit_tap, plus tunable weights.
+        deps: 类型化依赖, 含 embedder / llm / 可选 rerank_client
+            与 audit_tap 及可调权重。
 
     Returns:
-        Pipeline object with ``ainvoke(SearchRequest) -> SearchResult``.
+        Pipeline 对象, 提供 ``ainvoke(SearchRequest) -> SearchResult``。
     """
     return _SearchPipelineImpl(deps=deps)

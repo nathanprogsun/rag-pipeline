@@ -1,15 +1,4 @@
-"""Reader extensions: FormatAdapter 协议 + 错误包装。
-
-:
- - 每个 FormatAdapter 是 ``async def (buffer, *, encoding, upload_file) -> FormatReaderResult``
- - 返回值走 ``FormatReaderResult`` (raw_text / format_text / meta / images)
- - 失败抛 ``RAGError`` 子类 (由 ``wrap_parse_error`` / ``wrap_encoding_error`` 包装)
-
-``UploadedFileResult`` / ``UploadFileHandler`` / ``FormatReaderResult``
-single-source 统一从 ``rag.ingest.reader.types`` 导入, 避免双份定义飘移。
-``structure`` 字段已从 ``FormatReaderResult`` 移除 (doc-level structure
-不再由 reader 抽取, chunker 内部 per-chunk regex 现场重算 heading_stack)。
-"""
+"""Reader 扩展层: 格式适配器协议与错误包装工具。"""
 
 from __future__ import annotations
 
@@ -25,12 +14,12 @@ from rag.ingest.reader.types import (
     UploadedFileResult as UploadedFileResult,
 )
 
-# 单源 re-export: 避免下游 `from rag.ingest.reader.extensions.base import`
-# FormatReaderResult 时与 reader/types.py 飘移。
+# 统一从 reader.types 导入并 re-export, 避免下游从 extensions.base 导入时
+# 与类型定义发生漂移。
 
 
 class FormatAdapter(Protocol):
-    """Adapter 协议: 字节 + 扩展名 → FormatReaderResult."""
+    """格式适配器协议: 字节 + 编码 + 上传回调 → ``FormatReaderResult``。"""
 
     async def __call__(
         self,
@@ -42,7 +31,16 @@ class FormatAdapter(Protocol):
 
 
 def wrap_encoding_error(source: str, exc: Exception, parser: str) -> RAGError:
-    """编码失败包装 → RAGError(READER_ENCODING)."""
+    """将编码失败包装为 ``RAGError(code=READER_ENCODING)``。
+
+    Args:
+        source: 失败来源标识, 例如 ``"<buffer:csv>"``。
+        exc: 底层异常。
+        parser: 解析器名称, 用于错误信息定位。
+
+    Returns:
+        包装后的 ``RAGError`` 实例。
+    """
     return RAGError(
         code=ReaderErrorCode.ENCODING,
         message=f"{source}: {parser} encoding failed: {exc}",
@@ -50,7 +48,16 @@ def wrap_encoding_error(source: str, exc: Exception, parser: str) -> RAGError:
 
 
 def wrap_parse_error(source: str, exc: Exception, parser: str) -> RAGError:
-    """解析失败包装 → RAGError(READER_PARSE)."""
+    """将解析失败包装为 ``RAGError(code=READER_PARSE)``。
+
+    Args:
+        source: 失败来源标识, 例如 ``"<buffer:pdf>"``。
+        exc: 底层异常。
+        parser: 解析器名称, 用于错误信息定位。
+
+    Returns:
+        包装后的 ``RAGError`` 实例。
+    """
     return RAGError(
         code=ReaderErrorCode.PARSE,
         message=f"{source}: {parser} parse failed: {exc}",

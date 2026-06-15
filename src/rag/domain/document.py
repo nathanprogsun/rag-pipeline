@@ -8,11 +8,11 @@ from rag.domain.enums import StoredDatasource
 
 
 class ChunkMetadata(BaseModel):
-    """Chunk 的元数据载荷: 定位与溯源信息。
+    """Chunk 元数据: 定位与溯源信息。
 
-    ``datasource`` 用 ``StoredDatasource`` 而非 ``Datasource``: 这是落库语义
-    ('file' / 'manual' / 'api'), ingest 阶段的 'url' 已通过
-    ``ingest_to_stored_datasource`` 在 pipeline 边界映射。
+    `datasource` 取 `StoredDatasource` 而非 `IngestDatasource`: 这是落库语义
+    (`file` / `manual` / `api`), ingest 阶段的 `url` 已通过
+    `ingest_to_stored_datasource` 在 pipeline 边界映射。
     """
 
     dataset_id: uuid.UUID
@@ -25,7 +25,17 @@ class ChunkMetadata(BaseModel):
 
 
 class Chunk(BaseModel):
-    """入库前的原始 Chunk: reader + chunker 出来的内容块。"""
+    """入库前的原始 Chunk: reader + chunker 出来的内容块。
+
+    Args:
+        id: chunk 唯一标识。
+        dataset_id: 所属 dataset 的 UUID。
+        text: 块文本内容。
+        modality: 模态, `text` 或图片描述 `image_caption`。
+        image_path: 当 `modality=image_caption` 时有值, 指向图片。
+        metadata: 定位与溯源元数据。
+        embedding: 预计算的向量; 缺失时由 embedding 阶段补齐。
+    """
 
     id: uuid.UUID
     dataset_id: uuid.UUID
@@ -37,19 +47,18 @@ class Chunk(BaseModel):
 
 
 class ScoredDocument(BaseModel):
-    """召回结果: RRF 公式需要 score + rank 同时存。
+    """召回结果。RRF 公式需要 `score` + `rank` 同时存在。
 
     扩展字段:
-    - rerank_score: rerank 模型返回的独立相关性分数 (0~1),
-             在 ``filter_by_score`` 切换 rerank 模式时取代 score 进行阈值过滤。
-    - score_breakdown: per-source raw scores preserved by fusion.
-             Empty dict means single-source path that didn't go through fusion.
-             Keys: 'vector' / 'fulltext' / 'caption' / 'rerank'.
-             On duplicate sightings across groups, fusion takes ``max`` per source
-             (对齐 FastGPT ``concatScore.find(type).value = max(...)`` 语义),
-             so the original raw similarity per source survives RRF accumulation.
-    - (q, a) 溯源字段已迁出: 见 ``rag.infra.observability.trace.RetrievalTrace``,
-             与 ``ScoredDocument`` 解耦, 只在去重 / 链路阶段按平行数组传入。
+    - `rerank_score`: rerank 模型返回的独立相关性分数 (0~1),
+      在 `filter_by_score` 切换 rerank 模式时取代 `score` 进行阈值过滤。
+    - `score_breakdown`: 各源原始分数, fusion 阶段保留。
+      空 dict 表示单源路径未经过 fusion。
+      键取值: `vector` / `fulltext` / `caption` / `rerank`。
+      多组重复出现时, fusion 按源取 `max`, 因此各源原始相似度
+      在 RRF 累积后仍可追溯。
+    - (q, a) 溯源字段已迁出, 见 `rag.infra.observability.trace.RetrievalTrace`,
+      与 `ScoredDocument` 解耦, 只在去重 / 链路阶段按平行数组传入。
     """
 
     model_config = {"frozen": False}
@@ -61,8 +70,8 @@ class ScoredDocument(BaseModel):
     rank: int
     source: Literal["vector", "fulltext", "caption", "rerank"]
     modality: Literal["text", "image_caption"] = "text"
-    image_path: str | None = None  # modality=image_caption 时有值, cite 组装引用用
+    image_path: str | None = None  # `modality=image_caption` 时有值, cite 组装引用用
     metadata: ChunkMetadata
     embedding: list[float] | None = None
-    rerank_score: float | None = None  # filter_by_score 切换 rerank 时用的相关性分数
+    rerank_score: float | None = None  # `filter_by_score` 切换 rerank 时用的相关性分数
     score_breakdown: dict[str, float] = Field(default_factory=dict)

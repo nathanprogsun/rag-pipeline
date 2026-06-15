@@ -1,18 +1,13 @@
-"""Generation stage 10 per Contract 8.
+"""LLM 生成阶段。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 8:
+提供:
+- ``GenStage`` Protocol: 编排器中生成阶段的回调形状
+- ``GenFn`` 函数式别名 (便于测试)
+- ``LLMClientLike`` Protocol: 最小 LangChain chat 接口
+- ``CITE_SYSTEM_PROMPT``: 指示 LLM 插入 ``[id](CITE)`` 标记
+- ``make_llm_gen(llm)``: 从 chat 模型构造 ``GenFn`` 的工厂函数
 
-  10. generation (optional) — LLM call with citation instruction prompt
-
-This module provides:
-- ``GenStage`` Protocol: orchestrator's stage 10 callback shape
-- ``GenFn`` functional alias for test ergonomics
-- ``LLMClientLike`` Protocol: minimal LangChain chat interface
-- ``CITE_SYSTEM_PROMPT``: instructs the LLM to insert ``[id](CITE)`` markers
-- ``make_llm_gen(llm)``: factory that builds a ``GenFn`` from a chat model
-
-Marker parsing utilities used by this stage live in
-``rag.infra.text.citation_check``; this module is self-contained otherwise.
+标记解析工具位于 ``rag.infra.text.citation_check``。
 """
 
 from __future__ import annotations
@@ -26,21 +21,21 @@ from rag.domain.search import Citation, SearchRequest
 logger = logging.getLogger(__name__)
 
 
-# ---------- Protocol contracts ----------
+# ---------- Protocol 契约 ----------
 
 
 class LLMClientLike(Protocol):
-    """Minimal LLM interface — any LangChain BaseChatModel works.
+    """最小 LLM 接口, 任何 LangChain ``BaseChatModel`` 均可。
 
-    Not a Pydantic field type (Protocols aren't valid Pydantic types);
-    use ``Any`` in SearchPipelineDeps and rely on duck typing.
+    不是 Pydantic 字段类型 (Protocol 无法作为 Pydantic 类型), 在
+    ``SearchPipelineDeps`` 中使用 ``Any`` 并依赖 duck typing。
     """
 
     async def ainvoke(self, input: object) -> object: ...
 
 
 class GenStage(Protocol):
-    """Stage 10 callback. Produces LLM answer string with ``[id](CITE)`` markers."""
+    """生成阶段回调, 输出含 ``[id](CITE)`` 标记的 LLM 回答字符串。"""
 
     async def __call__(
         self,
@@ -53,7 +48,7 @@ class GenStage(Protocol):
 GenFn = Callable[[list, list[Citation], SearchRequest], Awaitable[str]]
 
 
-# ---------- LLM gen implementation ----------
+# ---------- LLM 生成实现 ----------
 
 
 CITE_SYSTEM_PROMPT: str = (
@@ -68,13 +63,14 @@ CITE_SYSTEM_PROMPT: str = (
 
 
 def make_llm_gen(llm: LLMClientLike) -> GenFn:
-    """Build a GenFn that calls LLM with citation instruction.
+    """构造调用 LLM 并附带引用指令的 ``GenFn``。
 
-    System prompt instructs the LLM to insert ``[id](CITE)`` markers at
-    cited positions. User prompt contains the formatted context
-    (``[1] content\n[2] content\n...``) plus the original query.
+    System prompt 指示 LLM 在引用位置插入 ``[id](CITE)`` 标记。
+    User prompt 包含格式化好的上下文 (``[1] content\n[2] content\n...``)
+    与原 query。
 
-    Returns a function suitable for ``SearchPipeline(gen=...)``.
+    Returns:
+        可直接传入 ``SearchPipeline(gen=...)`` 的函数。
     """
 
     async def gen(

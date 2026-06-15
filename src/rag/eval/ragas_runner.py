@@ -1,27 +1,9 @@
-"""RagasRunner — orchestrate RAGAS-stub metrics over a JSONL dataset.
+"""``RagasRunner``: 读取 JSONL, 计算 RAGAS stub 指标并聚合。
 
-Per `.agents/design/2026-06-14-rag-pipeline-delivery.md` task 19:
-
-JSONL schema (one record per line):
-    {
-      "query": "Python 列表推导式",
-      "answer": "Python 列表推导式是 ... [1](CITE)",
-      "contexts": ["Python 教程 ...", "列表推导式是 ..."],
-      "retrieved_chunk_ids": ["uuid1", "uuid2"],
-      "ground_truth_chunk_ids": ["uuid3"],
-      "metadata": {...}
-    }
-
-For each record, computes stub metrics:
-- ``faithfulness``: hallucination check (answer claims in context)
-- ``answer_relevance``: query-answer overlap (Jaccard)
-- ``context_precision``: retrieved ∩ ground_truth / |retrieved|
-
-Real RAGAS faithfulness / answer_relevancy require LLM judge + heavy
-RAGAS dep; per contract G-P0-2, deferred to v2. This stub ships today.
-
-The runner reads the JSONL, computes per-record metrics, aggregates
-across records with ``aggregate_metric`` (mean/std/min/max/median/count).
+JSONL 每行一条记录, 包含 query、answer、contexts、retrieved_chunk_ids、
+ground_truth_chunk_ids、metadata; 默认计算 ``faithfulness``、
+``answer_relevance``、``context_precision`` 三项, 并用
+``aggregate_metric`` 跨记录聚合。
 """
 
 from __future__ import annotations
@@ -50,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class RagasRecord(BaseModel):
-    """One entry in the RAGAS eval JSONL dataset."""
+    """RAGAS eval JSONL 数据集中的一条记录。"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -63,7 +45,7 @@ class RagasRecord(BaseModel):
 
 
 class RagasSampleResult(BaseModel):
-    """Per-record RAGAS result (all 3 stub metrics)."""
+    """per-record RAGAS 结果 (三项 stub 指标)。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -72,7 +54,7 @@ class RagasSampleResult(BaseModel):
 
 
 class RagasSummary(BaseModel):
-    """Aggregate RAGAS results across the eval set."""
+    """跨 eval 集合的 RAGAS 聚合结果。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -86,12 +68,11 @@ class RagasSummary(BaseModel):
 
 @dataclass
 class RagasRunner:
-    """Read JSONL, compute RAGAS-stub metrics per record, aggregate.
+    """读取 JSONL, 计算 RAGAS stub 指标并聚合。
 
     Args:
-        metrics: list of metric names to compute. Default: all 3.
-            Valid names: ``faithfulness``, ``answer_relevance``,
-            ``context_precision``.
+        metrics: 待计算的指标名列表, 默认全部三项。
+            合法名: ``faithfulness``、``answer_relevance``、``context_precision``。
     """
 
     metrics: list[str] = field(
@@ -108,7 +89,7 @@ class RagasRunner:
         *,
         output_path: Path | None = None,
     ) -> RagasSummary:
-        """Load JSONL, compute per-record metrics, aggregate, optionally write JSON."""
+        """加载 JSONL, 计算 per-record 指标, 聚合, 可选写入 JSON。"""
         records = _load_jsonl(dataset_path)
         if not records:
             return RagasSummary(
@@ -125,7 +106,9 @@ class RagasRunner:
                     query=record.query,
                     contexts=record.contexts,
                     retrieved_chunk_ids=[str(c) for c in record.retrieved_chunk_ids],
-                    ground_truth_chunk_ids=[str(c) for c in record.ground_truth_chunk_ids],
+                    ground_truth_chunk_ids=[
+                        str(c) for c in record.ground_truth_chunk_ids
+                    ],
                     metrics=self.metrics,
                 )
                 results.append(
@@ -136,7 +119,7 @@ class RagasRunner:
                 logger.warning(msg)
                 warnings.append(msg)
 
-        # Aggregate per metric
+        # 逐指标聚合
         aggregates: dict[str, dict[str, float]] = {}
         for metric_name in self.metrics:
             values = [r.metrics.get(metric_name, 0.0) for r in results]
@@ -150,7 +133,9 @@ class RagasRunner:
 
         if output_path is not None:
             output_path.write_text(
-                json.dumps(summary.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                json.dumps(
+                    summary.model_dump(mode="json"), indent=2, ensure_ascii=False
+                ),
                 encoding="utf-8",
             )
 
@@ -190,7 +175,9 @@ def _compute_ragas_metrics(
         elif name == "answer_relevance":
             out[name] = answer_relevance_stub(query, answer)
         elif name == "context_precision":
-            out[name] = context_precision_stub(retrieved_chunk_ids, ground_truth_chunk_ids)
+            out[name] = context_precision_stub(
+                retrieved_chunk_ids, ground_truth_chunk_ids
+            )
         else:
             logger.warning("Unknown RAGAS metric name: %s", name)
     return out

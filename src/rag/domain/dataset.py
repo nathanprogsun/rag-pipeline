@@ -17,7 +17,7 @@ DEFAULT_SYSTEM_PROMPT = "你是一个基于参考资料回答问题的助手。�
 
 
 class Dataset(BaseModel):
-    """知识库配置: 一个 Dataset 等价于一个独立的 RAG 知识库。"""
+    """知识库配置, 一个 `Dataset` 等价于一个独立的 RAG 知识库。"""
 
     id: uuid.UUID
     name: str
@@ -29,6 +29,6 @@ class Dataset(BaseModel):
     query_select_alpha: float = 0.3  # submodular α (0=多样性, 1=相关性)
     vector_weight: float = 0.7
     fulltext_weight: float = 0.3
-    prompt_template: str | None = None  # None → DEFAULT_PROMPT_TEMPLATE
+    prompt_template: str | None = None  # None 时回退到 `DEFAULT_PROMPT_TEMPLATE`
     system_prompt: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -1,4 +1,4 @@
-"""Chunker 公开类型: Chunk (重导出) + ChunkContext (新)。"""
+"""Chunker 公开类型: ``ChunkContext`` 元数据快照, 避免 Chunker 反向依赖 Reader/Normalizer。"""
 
 from __future__ import annotations
 
@@ -9,15 +9,16 @@ from rag.ingest.types import DocMeta
 
 @dataclass(frozen=True)
 class ChunkContext:
-    """Chunker 入参上下文: 来自 DocMeta 的元数据快照。
+    """Chunker 入参上下文: 来自 ``DocMeta`` 的元数据快照, 保证单向数据流 (Reader/Normalizer → Chunker)。
 
-    设计意图: Chunker 不反向依赖 Reader/Normalizer, 通过 ChunkContext 数据类
-    接收元数据, 保证单向数据流 (Reader/Normalizer -> Chunker)。
+    仅透传 ``source / file_type / page_count / encoding``; 标题/代码/表格等结构判定
+    下放到 per-chunk 现场, 不在 doc 级预计算。
 
-    ``heading_path`` / ``has_code`` / ``has_table`` 字段已删除:
-    doc-level ``heading_path`` 不再有消费者 (改由 per-chunk ``heading_stack``
-    现场重算取代), doc-level ``has_code`` / ``has_table`` 也改为 chunker per-chunk
-    regex 现场判定。``DocMeta`` 透传 ``source / file_type / page_count / encoding``。
+    Args:
+        source: 文档来源标识 (URI 或文件名)。
+        file_type: 推断的文件类型 (扩展名或 mime 子类型)。
+        page_count: PDF 等分页文档的页数。
+        encoding: 文本编码, 默认 ``utf-8``。
     """
 
     source: str = ""
@@ -27,14 +28,18 @@ class ChunkContext:
 
     @classmethod
     def empty(cls) -> ChunkContext:
+        """构造空 ``ChunkContext`` (全部字段取默认值)。"""
         return cls()
 
     @classmethod
     def from_meta(cls, meta: DocMeta) -> ChunkContext:
-        """从 DocMeta 构造 ChunkContext: 透传 source / file_type / page_count / encoding.
+        """从 ``DocMeta`` 构造 ``ChunkContext``, 仅依赖 ``DocMeta``。
 
-        ``from_meta_and_structure`` 已删除 (无 structure 入参),
-        改名 ``from_meta`` 反映纯 DocMeta 依赖。
+        Args:
+            meta: 上游 ``DocMeta`` 实例。
+
+        Returns:
+            字段填好的 ``ChunkContext``。
         """
         return cls(
             # 优先用 meta.source (file:///abs/path 或 https://...),
@@ -47,7 +52,8 @@ class ChunkContext:
 
 
 def _guess_file_type(meta: DocMeta) -> str:
-    """从 meta 推断 file_type (无后缀, 用 mime)。"""
+    """从 ``meta`` 推断 ``file_type``: 优先取文件名后缀, 否则取 ``mime`` 子类型。"""
+
     if meta.filename and "." in meta.filename:
         return meta.filename.rsplit(".", 1)[-1].lower()
     if meta.mime:

@@ -1,21 +1,14 @@
-"""Cite stage 9 per Contract 5.
+"""引用 (cite) 阶段。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 5:
+LLM 的 ``response`` 文本中含 ``[id](CITE)`` 标记, ``id`` 为
+``SearchResult.citations`` 列表的 1-based 索引 (索引顺序即 1-based 编号)。
 
-  Format: The LLM's ``response`` text contains ``[id](CITE)`` markers,
-  where ``id`` is the 1-based index into ``SearchResult.citations``.
+提供:
+- ``SimpleCite``: 默认 cite 阶段, 给 docs 编 1-based 序号并构造 Citation DTO。
 
-Stage 9 produces ``list[Citation]`` from final ScoredDocument list.
-The 1-based index is implicit in the list order (``citations[0]``
-corresponds to ``[1](CITE)`` in ``response``).
-
-This module provides:
-- ``SimpleCite``: default stage 9 — number docs 1-based, build Citation DTOs
-
-Marker-parsing utilities (``parse_inline_citations``, ``resolve_citation_positions``)
-have moved to ``rag.infra.text.citation_check`` and are imported by
-``CitationChecker`` from there. The ``SimpleCite`` generator remains here
-because it knows the search-specific Citation DTO shape.
+标记解析工具 (``parse_inline_citations``, ``resolve_citation_positions``)
+位于 ``rag.infra.text.citation_check``; ``SimpleCite`` 仍在此模块, 因为
+它依赖 search 专属的 Citation DTO 形状。
 """
 
 from __future__ import annotations
@@ -27,10 +20,10 @@ from rag.domain.search import Citation, SearchRequest
 
 
 class CiteStageProtocol:
-    """Stage 9 callback. Maps final ScoredDocument list to Citation DTOs.
+    """cite 阶段回调, 将最终 ScoredDocument 列表映射为 Citation DTO。
 
-    Note: this is a Callable, not a strict Protocol, so the orchestrator
-    can use either class instances or plain functions.
+    注: 本类型是 Callable 而非严格 Protocol, 因此编排器可接受类实例
+    或普通函数。
     """
 
     def __call__(
@@ -40,20 +33,19 @@ class CiteStageProtocol:
 
 
 class SimpleCite:
-    """Number docs 1-based, build Citation DTOs preserving order.
+    """给 docs 编 1-based 序号并按顺序构造 Citation DTO。
 
-    Each ``ScoredDocument`` becomes one ``Citation``:
-    - ``chunk_id`` / ``dataset_id``: from ScoredDocument
-    - ``source_name``: derived from ``source_name_fn`` (default: "src-{i}")
+    每个 ``ScoredDocument`` 对应一个 ``Citation``:
+    - ``chunk_id`` / ``dataset_id``: 来自 ScoredDocument
+    - ``source_name``: 由 ``source_name_fn`` 生成 (默认 ``"src-{i}"``)
     - ``content``: ScoredDocument.text
-    - ``image_path``: ScoredDocument.image_path (None for text chunks)
-    - ``score``: ScoredDocument.score (post-fusion RRF; for raw per-source
-                use ``score_breakdown`` directly)
+    - ``image_path``: ScoredDocument.image_path (文本 chunk 为 None)
+    - ``score``: ScoredDocument.score (融合后 RRF 值; 原始 per-source
+      分需读取 ``score_breakdown``)
 
     Args:
-        source_name_fn: Optional override for citation naming. Receives
-            (ScoredDocument, 1-based index) and returns a string.
-            Default: ``"src-{i}"`` (FastGPT-style).
+        source_name_fn: 可选命名覆盖函数, 接收 (ScoredDocument, 1-based idx)
+            返回字符串, 默认 ``"src-{i}"``。
     """
 
     DEFAULT_SOURCE_NAME: str = "src-{i}"
@@ -67,7 +59,7 @@ class SimpleCite:
 
     @staticmethod
     def _default_source_name(doc: ScoredDocument, idx: int) -> str:
-        """Default 1-based naming."""
+        """默认 1-based 命名。"""
         return SimpleCite.DEFAULT_SOURCE_NAME.format(i=idx)
 
     def __call__(

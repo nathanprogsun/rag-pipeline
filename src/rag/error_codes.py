@@ -1,8 +1,7 @@
-"""RAG 业务错误码。raise RAGError 时 code 须来自此模块。
+"""RAG 业务错误码, 业务码格式 ``{area}.{detail}``。
 
-按子系统分组, 业务码格式 ``{area}.{detail}``; ``ErrorCode`` 是所有分组的 ``Union``
-类型, 兼容旧代码 ``code: ErrorCode`` 注解。新代码请直接引用具体分组类型
-(``ReaderErrorCode.READER_PARSE``), 表达力更强。
+`ErrorCode` 是所有分组的联合类型, 兼容旧 `code: ErrorCode` 注解;
+新代码优先引用具体分组类型 (如 `ReaderErrorCode.PARSE`), 表达力更强。
 """
 
 from enum import StrEnum
@@ -45,7 +44,7 @@ class RetrievalErrorCode(StrEnum):
     NO_RESULTS = "retrieval.no_results"
 
 
-# 兼容旧注解 ``code: ErrorCode``; 新代码优先引用具体 ``*ErrorCode``。
+# 兼容旧注解 `code: ErrorCode`; 新代码优先引用具体 `*ErrorCode`。
 ErrorCode = (
     ReaderErrorCode
     | ChunkerErrorCode

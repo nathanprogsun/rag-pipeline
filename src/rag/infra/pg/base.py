@@ -29,7 +29,7 @@ class TimestampMixin:
 
 
 class SoftDeleteMixin:
-    """Provides deleted_at column; NULL means active row."""
+    """提供 ``deleted_at`` 列; ``NULL`` 表示有效行。"""
 
     __mapper_args__: ClassVar[dict[str, object]] = {"confirm_deleted_rows": False}
 
@@ -42,9 +42,9 @@ class SoftDeleteMixin:
 
 @event.listens_for(Session, "do_orm_execute")
 def _apply_soft_delete_filter(execute_state: ORMExecuteState) -> None:
-    """Exclude soft-deleted rows from SELECT queries.
+    """从 SELECT 查询中过滤掉软删行。
 
-    Opt out per query with `.execution_options(include_deleted=True)`.
+    单条查询可通过 ``.execution_options(include_deleted=True)`` 关闭该过滤。
     """
     if (
         execute_state.is_select

@@ -1,15 +1,4 @@
-"""``rag-eval`` Typer CLI: JSONL dataset → EvalRunner aggregate metrics.
-
-Mirrors ``rag-ingest`` CLI style. Reads (query, dataset_ids,
-ground_truth_chunk_ids, k) JSONL, runs ``EvalRunner`` against a
-pipeline callable, writes aggregated metrics to stdout (text/JSON)
-and optionally to a JSON file.
-
-Usage:
-    rag-eval --dataset eval.jsonl
-    rag-eval --dataset eval.jsonl --output json
-    rag-eval --dataset eval.jsonl --k 10 --concurrency 4 --output-path summary.json
-"""
+"""``rag-eval`` Typer CLI: JSONL 数据集 → ``EvalRunner`` 聚合指标。"""
 
 from __future__ import annotations
 
@@ -43,7 +32,7 @@ def _err_exit(msg: str, code: int = 1) -> typer.Exit:
 
 
 def _emit_text(summary: EvalSummary) -> None:
-    """Emit aggregate metrics in human-readable text format."""
+    """以可读文本格式输出聚合指标。"""
     typer.echo(f"Samples: {summary.sample_count}")
     typer.echo(f"Warnings: {len(summary.warnings)}")
     for w in summary.warnings[:5]:
@@ -61,7 +50,7 @@ def _emit_text(summary: EvalSummary) -> None:
 
 
 def _emit_json(summary: EvalSummary) -> None:
-    """Emit full summary as JSON to stdout."""
+    """将完整 summary 以 JSON 输出到 stdout。"""
     typer.echo(
         json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2)
     )
@@ -105,7 +94,15 @@ def main(
         ),
     ] = 4,
 ) -> None:
-    """跑 eval dataset, 输出聚合指标。"""
+    """跑 eval dataset, 输出聚合指标。
+
+    Args:
+        dataset: eval JSONL 数据集路径。
+        output: 输出格式, text 或 json。
+        output_path: 可选 summary JSON 输出文件。
+        k: 默认 k (per-record JSONL 未指定时使用)。
+        concurrency: 并发 pipeline 调用数。
+    """
     if output.lower() not in ("text", "json"):
         _err_exit(f"--output 必须是 text 或 json, got {output!r}")
 

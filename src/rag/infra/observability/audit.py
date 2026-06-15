@@ -1,18 +1,4 @@
-"""Audit tap for per-request JSONL audit logging.
-
-Per `.agents/design/2026-06-14-cross-task-contracts.md` task 15:
-- ``AuditRecord``: per-request structured record (Pydantic).
-- ``AuditTap``: append records as JSONL (one object per line).
-
-Used by ``SearchPipeline`` when ``req.audit=True``:
-- After ``ainvoke`` returns, build ``AuditRecord.from_search_result(req, result)``
-- Pass to ``AuditTap.record(...)`` for JSONL append.
-- EvalRunner / debug channels read the JSONL stream offline.
-
-NDJSON schema:
-    {"ts":"...","request_id":"...","query":"...","dataset_ids":[...],"hit_count":N,
-     "stage_hit_counts":{...},"citation_count":N,"warnings":[...],"failed_dataset_ids":[...]}
-"""
+"""请求级 JSONL 审计日志的写入器。"""
 
 from __future__ import annotations
 
@@ -35,12 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class AuditRecord(BaseModel):
-    """Per-request audit record. Serialized to NDJSON via ``model_dump_json``.
+    """单次请求的审计记录。通过 ``model_dump_json`` 序列化为 NDJSON。
 
-    Captures provenance for offline analysis: which query was asked,
-    how many hits each stage produced, whether the LLM response contained
-    citations, what warnings accumulated. Does NOT include the full hit
-    contents (use ``_intermediate_hits`` dump separately if needed).
+    用于离线追溯：记录查询内容、各阶段命中数、LLM 响应是否含引用、
+    累计的告警等。不包含完整命中内容。
     """
 
     model_config = ConfigDict(frozen=True)
@@ -55,8 +39,8 @@ class AuditRecord(BaseModel):
     parent_doc_window: int
     response: str
     citation_count: int
-    hit_count: int  # post-filter, post-cite
-    intermediate_hits_count: int  # post-rerank, post-filter (full chain end)
+    hit_count: int  # 过滤后、引用检查后的命中数
+    intermediate_hits_count: int  # 重排后、过滤后的中间命中数（完整链路末端）
     warnings: list[str]
     failed_dataset_ids: list[uuid.UUID]
     errors: list[str] = Field(default_factory=list)
@@ -69,11 +53,10 @@ class AuditRecord(BaseModel):
         *,
         request_id: str | None = None,
     ) -> AuditRecord:
-        """Build record from SearchRequest + SearchResult.
+        """从 ``SearchRequest`` 与 ``SearchResult`` 构造审计记录。
 
-        Reads ``_intermediate_hits`` from result (Contract 6: PrivateAttr,
-        programmatic access). Captures retrieval / generation flags from
-        request sub-configs.
+        读取 ``result._intermediate_hits`` 作为中间命中数; 从 ``SearchRequest``
+        的子配置中提取检索 / 生成相关标志位。
         """
         intermediate_count = len(result._intermediate_hits)
         rid = request_id if request_id is not None else str(uuid.uuid4())
@@ -98,14 +81,14 @@ class AuditRecord(BaseModel):
 
 
 class AuditTap:
-    """Append-only NDJSON writer for AuditRecord.
+    """``AuditRecord`` 的追加式 NDJSON 写入器。
 
     Args:
-        file_path: Path to JSONL file (created if missing, appended otherwise).
-        sample_rate: 0.0-1.0 probability of recording each request
-            (1.0 = record all; useful for high-volume dev).
-        sync: If True, write synchronously (suitable for tests).
-            If False (default), writes are buffered and flushed on close.
+        file_path: JSONL 文件路径（不存在则创建, 存在则追加）。
+        sample_rate: 每条请求被记录的概率, 取值范围 ``[0.0, 1.0]``
+            （``1.0`` 表示全量记录, 适合高流量调试场景）。
+        sync: ``True`` 时同步写入（适合测试）; ``False``（默认）时
+            写入会被缓冲, 仅在 ``close()`` 时落盘。
     """
 
     def __init__(
@@ -127,10 +110,9 @@ class AuditTap:
         return random.random() < self.sample_rate  # noqa: S311
 
     async def record(self, record: AuditRecord) -> bool:
-        """Append a single record. Returns True if recorded, False if sampled out.
+        """追加单条记录。被采样命中时返回 ``True``, 未命中返回 ``False``。
 
-        Never raises on write errors (logs warning instead). Audit must
-        never break the orchestrator's response flow.
+        写入出错时仅记录告警日志而不抛出异常, 避免审计失败打断主流程。
         """
         if self._closed:
             logger.warning("AuditTap closed, skipping record for %s", record.request_id)
@@ -157,9 +139,9 @@ class AuditTap:
 
 
 def read_jsonl_records(file_path: Path) -> list[dict[str, Any]]:
-    """Read all JSONL records from a file (offline analysis).
+    """从 JSONL 文件读取全部记录（用于离线分析）。
 
-    Skips malformed lines with a warning. Returns list of dicts.
+    跳过格式错误的行并记录告警。返回字典列表。
     """
     records: list[dict[str, Any]] = []
     with file_path.open("r", encoding="utf-8") as f:

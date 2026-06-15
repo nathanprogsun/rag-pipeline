@@ -1,14 +1,6 @@
-"""``rag-search`` Typer CLI: query → SearchResult via build_search_pipeline.
+"""``rag-search`` Typer CLI: query → SearchResult。
 
-Mirrors ``rag-ingest`` CLI style (typer + typer.echo). Reads ``.env``
-via pydantic-settings, constructs a ``SearchPipelineDeps`` with default
-options, and runs the pipeline against the user query.
-
-Usage:
-    rag-search --query "Python 列表推导式" --dataset-id <UUID> [--top-k 10]
-    rag-search -q "Java 静态类型" --dataset-id <UUID1> --dataset-id <UUID2>
-    rag-search -q "test" --dataset-id <UUID> --output json
-    rag-search -q "test" --dataset-id <UUID> --audit   # write NDJSON
+通过 ``build_search_pipeline`` 装配 pipeline 并执行检索 + 生成。
 """
 
 from __future__ import annotations
@@ -39,17 +31,17 @@ _SEPARATOR: Final[str] = "=" * 60
 
 
 def _build_embedder() -> Embeddings:
-    """Construct real embedding model from settings."""
+    """从 settings 构造真实 embedding 模型。"""
     return get_embed_model()
 
 
 def _build_llm() -> object:
-    """Construct real LLM from settings."""
+    """从 settings 构造真实 LLM。"""
     return get_chat_model()
 
 
 def _build_rerank_or_none() -> object:
-    """Construct rerank model if API key set, else None."""
+    """若 API key 已设置则构造 rerank 模型, 否则返回 None。"""
     if not settings.openai_rerank_api_key.get_secret_value().strip():
         return None
     return get_rerank_model()
@@ -64,7 +56,7 @@ def _err_exit(msg: str, code: int = 1) -> typer.Exit:
 
 
 def _emit_text(query: str, response: str, citations: list, hits: list) -> None:
-    """Emit response + citations in human-readable text format."""
+    """以可读文本格式输出 response 和 citations。"""
     typer.echo(_SEPARATOR)
     typer.echo(f"Query: {query}")
     typer.echo(_SEPARATOR)
@@ -84,7 +76,7 @@ def _emit_text(query: str, response: str, citations: list, hits: list) -> None:
 def _emit_json(
     query: str, request: SearchRequest, response_text: str, citations: list, hits: list
 ) -> None:
-    """Emit result as JSON to stdout."""
+    """以 JSON 格式输出结果到 stdout。"""
     out = {
         "query": query,
         "dataset_ids": [str(d) for d in request.dataset_ids],
@@ -159,7 +151,17 @@ def main(
         typer.Option("--rerank-weight", help="Rerank 权重 (0-1, 默认 0.7)。"),
     ] = 0.7,
 ) -> None:
-    """查询 rag-pipeline 并输出 SearchResult。"""
+    """查询 rag-pipeline 并输出 SearchResult。
+
+    Args:
+        query: 用户搜索 query。
+        dataset_id: 目标 dataset UUID 列表, 至少 1 个。
+        top_k: 每 dataset 召回 top-k。
+        output: 输出格式, text 或 json。
+        audit: 是否启用 audit 写入。
+        audit_path: audit NDJSON 显式写入路径。
+        rerank_weight: rerank 权重, 范围 0-1。
+    """
     if not query or not query.strip():
         _err_exit("query 不能为空")
     if not dataset_id:
@@ -212,7 +214,7 @@ def main(
 
 
 def _default_audit_path() -> Path | None:
-    """Return default audit path from settings, or None."""
+    """返回 settings 中的 audit 路径, 未配置则返回 None。"""
     raw = getattr(settings, "cache_audit_path", None)
     if raw and str(raw).strip():
         return Path(str(raw))

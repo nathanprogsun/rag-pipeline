@@ -1,23 +1,9 @@
 """WRRF (Weighted Reciprocal Rank Fusion) 跨 query variant 融合。
 
-Per `.agents/design/2026-06-14-cross-task-contracts.md` Contract 1:
-
-签名::
-
-    def intra_fusion(
-        query_groups: list[list[ScoredDocument)],  # N 路 query variant
-        weights: list[float] | None = None,        # per-variant trust, default uniform
-        rrf_k: int = DEFAULT_RRF_K,
-    ) -> list[ScoredDocument]
-
-公式: ``score(c) = Σ_g w_g / (rrf_k + rank_g(c))``
-其中 ``rank_g(c)`` 是 c 在 group g 内的局部 rank (从 enumerate(start=1) 起)。
-
-重复 chunk_id:
-- ``score`` 累加 (RRF 排序信号)
-- ``score_breakdown[source] = max(prev, raw_score)`` (per-source raw 保留)
-
-不修改入参 (model_copy 输出新对象)。
+公式: ``score(c) = Σ_g w_g / (rrf_k + rank_g(c))``, 其中 ``rank_g(c)``
+为 ``c`` 在 group ``g`` 内的 1-based 局部 rank。重复 ``chunk_id`` 的
+``score`` 累加, ``score_breakdown[source]`` 取 max 合并。不修改入参
+(通过 ``model_copy`` 输出新对象)。
 """
 
 from __future__ import annotations
@@ -36,28 +22,26 @@ def intra_fusion(
     weights: list[float] | None = None,
     rrf_k: int = DEFAULT_RRF_K,
 ) -> list[ScoredDocument]:
-    """N-way WRRF over query variants.
+    """对多路 query variant 做 WRRF 融合。
 
-    Contract 1 invariants:
-    - query_groups[g] is one query variant's combined retrieval result
-      (already merged across vector+fulltext upstream by recall layer).
-    - weights[g] is per-query-variant trust weight. Default uniform 1.0.
-    - Local rank via enumerate(start=1) per group; cross-group RRF sums
-      on same chunk_id.
-    - score_breakdown[source] = max() on duplicate sightings.
-    - Never mutates inputs; returns new list with new ScoredDocument copies.
+    - ``query_groups[g]`` 为单一 query variant 的合并检索结果 (上游已
+      合并 vector + fulltext)。
+    - ``weights[g]`` 为 per-variant 信任权重, 默认 uniform 1.0。
+    - 同 ``chunk_id`` 在不同 group 间按 RRF 累加。
+    - ``score_breakdown[source]`` 在重复时取 max 合并。
+    - 不修改入参, 返回新对象。
 
     Args:
-        query_groups: N query variants, each a list of ScoredDocument.
-        weights: Per-variant weights, length == len(query_groups), default uniform.
-        rrf_k: RRF k constant; default 60 (Cormack 2009).
+        query_groups: N 路 query variant 检索结果。
+        weights: per-variant 权重, 长度需与 ``query_groups`` 一致, 默认 uniform。
+        rrf_k: RRF k 常数, 默认 60。
 
     Returns:
-        ScoredDocument list sorted by RRF score descending.
-        score_breakdown preserved with per-source max merge.
+        按 RRF score 降序排列的 ``ScoredDocument`` 列表, ``score_breakdown``
+        经 per-source max 合并保留。
 
     Raises:
-        ValueError: weights length != query_groups length.
+        ValueError: ``weights`` 长度与 ``query_groups`` 不一致。
     """
     if not query_groups or not any(query_groups):
         return []
@@ -104,7 +88,7 @@ def intra_fusion(
 
 @dataclass
 class _Accumulator:
-    """Per-chunk fusion state. Not exposed."""
+    """per-chunk 融合状态, 不对外暴露。"""
 
     doc: ScoredDocument
     rrf_score: float
