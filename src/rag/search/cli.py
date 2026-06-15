@@ -112,12 +112,13 @@ def _emit_json(
     typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
 
 
-@app.command()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     query: Annotated[
-        str,
+        str | None,
         typer.Option("-q", "--query", help="搜索 query (用户提问)。"),
-    ],
+    ] = None,
     dataset_id: Annotated[
         list[uuid.UUID] | None,
         typer.Option(
@@ -156,17 +157,25 @@ def main(
         typer.Option("--rerank-weight", help="Rerank 权重 (0-1, 默认 0.7)。"),
     ] = 0.7,
 ) -> None:
-    """查询 rag-pipeline 并输出 SearchResult。
+    """默认行为: 执行搜索; 若有子命令 (`list-datasets`) 则交由其处理。
+
+    用 `invoke_without_command=True` 让 `rag-search -q ...` 直接走搜索,
+    `rag-search list-datasets list` 走子命令, 互不干扰。
 
     Args:
-        query: 用户搜索 query。
-        dataset_id: 目标 dataset UUID 列表, 至少 1 个。
+        ctx: typer 上下文, 用于判断是否调用了子命令。
+        query: 用户搜索 query (子命令模式可省略)。
+        dataset_id: 目标 dataset UUID 列表, 至少 1 个 (子命令模式可省略)。
         top_k: 每 dataset 召回 top-k。
         output: 输出格式, text 或 json。
         audit: 是否启用 audit 写入。
         audit_path: audit NDJSON 显式写入路径。
         rerank_weight: rerank 权重, 范围 0-1。
     """
+    # 子命令接管: 跳过默认搜索行为
+    if ctx.invoked_subcommand is not None:
+        return
+
     if not query or not query.strip():
         _err_exit("query 不能为空")
     if not dataset_id:
