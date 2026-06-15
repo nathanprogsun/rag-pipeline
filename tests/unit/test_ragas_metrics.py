@@ -292,7 +292,11 @@ def test_compute_ragas_metrics_all_three() -> None:
         ground_truth_chunk_ids=["a"],
         metrics=["faithfulness", "answer_relevance", "context_precision"],
     )
-    assert set(metrics.keys()) == {"faithfulness", "answer_relevance", "context_precision"}
+    assert set(metrics.keys()) == {
+        "faithfulness",
+        "answer_relevance",
+        "context_precision",
+    }
 
 
 def test_compute_ragas_metrics_unknown_skipped() -> None:

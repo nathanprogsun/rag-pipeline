@@ -221,7 +221,14 @@ def test_ndcg_idcg_caps_at_min_k_gt() -> None:
 
 def test_aggregate_empty() -> None:
     agg = aggregate_metric([])
-    assert agg == {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "median": 0.0, "count": 0}
+    assert agg == {
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "median": 0.0,
+        "count": 0,
+    }
 
 
 def test_aggregate_single_value() -> None:
@@ -256,7 +263,7 @@ def test_aggregate_std() -> None:
     #           = (0.5625 + 0.5625 + 0.0625 + 1.5625) / 4 = 0.6875
     # std = sqrt(0.6875) ≈ 0.829
     agg = aggregate_metric([0.0, 0.0, 1.0, 2.0])
-    assert agg["std"] == pytest.approx(0.6875 ** 0.5)
+    assert agg["std"] == pytest.approx(0.6875**0.5)
 
 
 # ---------- _to_set (internal) is exercised via the public APIs above ----------

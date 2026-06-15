@@ -38,10 +38,14 @@ async def test_compute_calls_all_three_metrics() -> None:
             runner._faithfulness, "single_turn_score", new=AsyncMock(return_value=0.9)
         ) as mock_f,
         patch.object(
-            runner._answer_relevancy, "single_turn_score", new=AsyncMock(return_value=0.8)
+            runner._answer_relevancy,
+            "single_turn_score",
+            new=AsyncMock(return_value=0.8),
         ) as mock_a,
         patch.object(
-            runner._context_precision, "single_turn_score", new=AsyncMock(return_value=0.7)
+            runner._context_precision,
+            "single_turn_score",
+            new=AsyncMock(return_value=0.7),
         ) as mock_c,
     ):
         result = await runner.compute(
@@ -69,9 +73,7 @@ async def test_compute_passes_correct_sample() -> None:
         captured_sample.append(sample)
         return 0.5
 
-    with patch.object(
-        runner._faithfulness, "single_turn_score", new=_capture
-    ):
+    with patch.object(runner._faithfulness, "single_turn_score", new=_capture):
         await runner.compute(
             user_input="test query",
             response="test answer",
@@ -95,7 +97,9 @@ async def test_compute_coerces_to_float() -> None:
     fake_score = MagicMock()
     fake_score.__float__ = lambda self: 0.42
     with patch.object(
-        runner._faithfulness, "single_turn_score", new=AsyncMock(return_value=fake_score)
+        runner._faithfulness,
+        "single_turn_score",
+        new=AsyncMock(return_value=fake_score),
     ):
         result = await runner.compute(
             user_input="q", response="a", retrieved_contexts=[]
@@ -125,7 +129,9 @@ async def test_compute_per_metric_failure_does_not_fail_others() -> None:
             new=AsyncMock(return_value=0.6),
         ),
     ):
-        result = await runner.compute(user_input="q", response="a", retrieved_contexts=[])
+        result = await runner.compute(
+            user_input="q", response="a", retrieved_contexts=[]
+        )
 
     assert "faithfulness" not in result  # failed
     assert result["answer_relevancy"] == 0.5
@@ -141,13 +147,19 @@ async def test_compute_empty_contexts() -> None:
             runner._faithfulness, "single_turn_score", new=AsyncMock(return_value=1.0)
         ),
         patch.object(
-            runner._answer_relevancy, "single_turn_score", new=AsyncMock(return_value=0.0)
+            runner._answer_relevancy,
+            "single_turn_score",
+            new=AsyncMock(return_value=0.0),
         ),
         patch.object(
-            runner._context_precision, "single_turn_score", new=AsyncMock(return_value=0.0)
+            runner._context_precision,
+            "single_turn_score",
+            new=AsyncMock(return_value=0.0),
         ),
     ):
-        result = await runner.compute(user_input="q", response="a", retrieved_contexts=[])
+        result = await runner.compute(
+            user_input="q", response="a", retrieved_contexts=[]
+        )
 
     assert result["faithfulness"] == 1.0
     assert result["answer_relevancy"] == 0.0
