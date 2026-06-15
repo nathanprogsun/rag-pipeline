@@ -1,1 +1,0 @@
-"""{{PROJECT_NAME}} package — built on top of rag-pipeline."""

@@ -9,7 +9,7 @@ from enum import StrEnum
 
 
 class ReaderErrorCode(StrEnum):
-    """Reader 阶段错误码 (本地文件 / URL / API / Office 解析)。"""
+    """Reader 阶段错误码 (本地文件 / URL / Office 解析)。"""
 
     NOT_FOUND = "reader.not_found"
     PERMISSION = "reader.permission"
@@ -17,9 +17,6 @@ class ReaderErrorCode(StrEnum):
     PARSE = "reader.parse"
     UNSUPPORTED = "reader.unsupported"
     TOO_LARGE = "reader.too_large"
-    API_AUTH = "reader.api_auth"
-    API_TIMEOUT = "reader.api_timeout"
-    API_STATUS = "reader.api_status"
 
 
 class ChunkerErrorCode(StrEnum):

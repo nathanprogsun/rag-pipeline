@@ -26,7 +26,7 @@ from rag.eval.runner import EvalRunner, EvalSummary
 from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
-from rag.pipeline.full import PipelineDeps, build_full_pipeline
+from rag.search.factory import SearchPipelineDeps, build_search_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,9 @@ def _emit_text(summary: EvalSummary) -> None:
 
 def _emit_json(summary: EvalSummary) -> None:
     """Emit full summary as JSON to stdout."""
-    typer.echo(json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    typer.echo(
+        json.dumps(summary.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
 
 
 @app.command()
@@ -118,8 +120,8 @@ def main(
     except Exception as e:
         _err_exit(f"构建依赖失败: {e!r}")
 
-    deps = PipelineDeps(embedder=embedder, llm=llm, rerank_client=rerank, top_k=k)
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=embedder, llm=llm, rerank_client=rerank, top_k=k)
+    pipeline = build_search_pipeline(deps)
 
     runner = EvalRunner(pipeline=pipeline.ainvoke, default_k=k, concurrency=concurrency)
     summary = asyncio.run(runner.run(dataset, output_path=output_path))

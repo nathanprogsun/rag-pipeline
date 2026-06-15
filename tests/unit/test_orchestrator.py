@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.orchestrator`` (multi-dataset pipeline).
+"""Unit tests for ``rag.search.orchestrator`` (multi-dataset pipeline).
 
 Tests use AsyncMock for subgraphs / callbacks (no DB, no network, no LLM).
 Validates:
@@ -19,8 +19,8 @@ import pytest
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import Citation, SearchRequest, SearchResult
-from rag.pipeline.orchestrator import (
-    PipelineOrchestrator,
+from rag.search.orchestrator import (
+    SearchPipeline,
     _dedup_by_chunk_id,
 )
 
@@ -104,13 +104,13 @@ def _req(
 
 def test_init_raises_on_empty_subgraphs() -> None:
     with pytest.raises(ValueError, match="subgraphs must be a non-empty"):
-        PipelineOrchestrator(subgraphs={})
+        SearchPipeline(subgraphs={})
 
 
 def test_init_default_rrf_k_is_60() -> None:
     ds_id = uuid.uuid4()
     sg = _make_subgraph(dataset_id=ds_id, hits_by_query={})
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     assert orch.rrf_k == 60
 
 
@@ -124,7 +124,7 @@ async def test_ainvoke_identity_when_query_ext_is_none() -> None:
         dataset_id=ds_id,
         hits_by_query={"python": [_doc(A, dataset_id=ds_id, score=0.9)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(query="python", dataset_ids=[ds_id])
 
     await orch.ainvoke(req)
@@ -139,7 +139,7 @@ async def test_ainvoke_uses_query_ext_variants() -> None:
     ds_id = uuid.uuid4()
     sg = _make_subgraph(dataset_id=ds_id, hits_by_query={})
     qe = _make_query_ext(variants=["q1", "q2", "q3"])
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, query_ext=qe)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, query_ext=qe)
     req = _req(query="original", dataset_ids=[ds_id])
 
     await orch.ainvoke(req)
@@ -159,7 +159,7 @@ async def test_ainvoke_query_ext_failure_falls_back_to_original() -> None:
     )
     qe = MagicMock()
     qe.side_effect = RuntimeError("LLM down")
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, query_ext=qe)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, query_ext=qe)
     req = _req(query="original", dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -186,7 +186,7 @@ async def test_ainvoke_fans_out_to_all_datasets_in_parallel() -> None:
         dataset_id=ds_b,
         hits_by_query={"q": [_doc(B, dataset_id=ds_b)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_a: sg_a, ds_b: sg_b})
+    orch = SearchPipeline(subgraphs={ds_a: sg_a, ds_b: sg_b})
     req = _req(query="q", dataset_ids=[ds_a, ds_b])
 
     await orch.ainvoke(req)
@@ -206,7 +206,7 @@ async def test_ainvoke_failed_subgraph_returns_empty_for_that_dataset() -> None:
         dataset_id=ds_b,
         hits_by_query={"q": [_doc(B, dataset_id=ds_b, score=0.9)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_a: sg_a, ds_b: sg_b})
+    orch = SearchPipeline(subgraphs={ds_a: sg_a, ds_b: sg_b})
     req = _req(query="q", dataset_ids=[ds_a, ds_b])
 
     result = await orch.ainvoke(req)
@@ -225,7 +225,7 @@ async def test_ainvoke_failed_dataset_id_tracked() -> None:
         dataset_id=ds_registered,
         hits_by_query={"q": [_doc(A, dataset_id=ds_registered)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_registered: sg})
+    orch = SearchPipeline(subgraphs={ds_registered: sg})
     req = _req(query="q", dataset_ids=[ds_registered, ds_missing])
 
     result = await orch.ainvoke(req)
@@ -248,7 +248,7 @@ async def test_ainvoke_dedupes_by_chunk_id() -> None:
         },
     )
     qe = _make_query_ext(variants=["v1", "v2"])
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, query_ext=qe)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, query_ext=qe)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -270,7 +270,7 @@ async def test_ainvoke_filter_by_score_applied() -> None:
             ]
         },
     )
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs={ds_id: sg},
         filter_score_threshold=0.5,
     )
@@ -295,7 +295,7 @@ async def test_ainvoke_no_filter_when_threshold_is_none() -> None:
             ]
         },
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, filter_score_threshold=None)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, filter_score_threshold=None)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -317,7 +317,7 @@ async def test_ainvoke_token_budget_filters_long_hits() -> None:
             ]
         },
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, token_budget=1000)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, token_budget=1000)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -337,10 +337,8 @@ async def test_ainvoke_rerank_callback_invoked() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id), _doc(B, dataset_id=ds_id)]},
     )
-    rerank = AsyncMock(
-        return_value=[_doc(B, dataset_id=ds_id, score=0.99)]
-    )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, rerank=rerank)
+    rerank = AsyncMock(return_value=[_doc(B, dataset_id=ds_id, score=0.99)])
+    orch = SearchPipeline(subgraphs={ds_id: sg}, rerank=rerank)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -358,10 +356,8 @@ async def test_ainvoke_parent_doc_callback_invoked() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id), _doc(B, dataset_id=ds_id)]},
     )
-    parent_doc = AsyncMock(
-        return_value=[_doc(C, dataset_id=ds_id, text="parent")]
-    )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, parent_doc=parent_doc)
+    parent_doc = AsyncMock(return_value=[_doc(C, dataset_id=ds_id, text="parent")])
+    orch = SearchPipeline(subgraphs={ds_id: sg}, parent_doc=parent_doc)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -386,7 +382,7 @@ async def test_ainvoke_cite_callback_invoked() -> None:
         score=0.5,
     )
     cite = MagicMock(return_value=[citation])
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, cite=cite)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, cite=cite)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -403,7 +399,7 @@ async def test_ainvoke_gen_callback_invoked() -> None:
         hits_by_query={"q": [_doc(A, dataset_id=ds_id)]},
     )
     gen = AsyncMock(return_value="The answer is 42.")
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, gen=gen)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, gen=gen)
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -419,7 +415,7 @@ async def test_ainvoke_empty_response_when_gen_is_none() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -434,7 +430,7 @@ async def test_ainvoke_empty_citations_when_cite_is_none() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -452,7 +448,7 @@ async def test_ainvoke_result_has_intermediate_hits_populated() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id), _doc(B, dataset_id=ds_id)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -468,7 +464,7 @@ async def test_ainvoke_intermediate_hits_excluded_from_json() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -489,7 +485,7 @@ async def test_ainvoke_warnings_capture_internal_failures() -> None:
     )
     qe = MagicMock()
     qe.side_effect = RuntimeError("LLM down")
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg}, query_ext=qe)
+    orch = SearchPipeline(subgraphs={ds_id: sg}, query_ext=qe)
     req = _req(query="original", dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -509,7 +505,7 @@ async def test_ainvoke_warnings_capture_subgraph_failures() -> None:
         dataset_id=ds_b,
         hits_by_query={"q": [_doc(B, dataset_id=ds_b)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_a: sg_a, ds_b: sg_b})
+    orch = SearchPipeline(subgraphs={ds_a: sg_a, ds_b: sg_b})
     req = _req(query="q", dataset_ids=[ds_a, ds_b])
 
     result = await orch.ainvoke(req)
@@ -525,7 +521,7 @@ async def test_ainvoke_empty_warnings_on_clean_run() -> None:
         dataset_id=ds_id,
         hits_by_query={"q": [_doc(A, dataset_id=ds_id)]},
     )
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
@@ -537,7 +533,7 @@ async def test_ainvoke_empty_subgraph_returns_empty_hits() -> None:
     """Empty retrieval → empty _intermediate_hits, no crash."""
     ds_id = uuid.uuid4()
     sg = _make_subgraph(dataset_id=ds_id, hits_by_query={})
-    orch = PipelineOrchestrator(subgraphs={ds_id: sg})
+    orch = SearchPipeline(subgraphs={ds_id: sg})
     req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)

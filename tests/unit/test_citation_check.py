@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.retrieval.citation_check`` (5e2).
+"""Unit tests for ``rag.infra.text.citation_check`` (5e2).
 
 Tests cover Contract 5 marker validation:
 - All referenced ids map to actual citations → valid=True
@@ -15,7 +15,7 @@ import uuid
 import pytest
 
 from rag.domain.search import Citation
-from rag.retrieval.citation_check import CitationChecker
+from rag.infra.text.citation_check import CitationChecker
 
 
 def _cite(idx_1based: int) -> Citation:

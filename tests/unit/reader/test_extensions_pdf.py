@@ -34,7 +34,7 @@ def test_pdf_extension_adapter_against_real_sample() -> None:
     assert result.meta.mime == PDF_MIME
     assert result.meta.mime == "application/pdf"
     assert result.meta.encoding == "utf-8"
-    assert result.meta.datasource == "api"
+    assert result.meta.datasource == "file"
     assert result.meta.page_count == 3
     assert isinstance(result.meta.page_count, int)
     assert isinstance(result.raw_text, str)
@@ -156,7 +156,7 @@ def test_pdf_extension_adapter_meta_datasource_placeholder() -> None:
         mock_postprocess.return_value = ""
 
         result = asyncio.run(pdf_adapter(b"%PDF-1.4\n"))
-    assert result.meta.datasource == "api"
+    assert result.meta.datasource == "file"
 
 
 # ── encoding 参数 ──

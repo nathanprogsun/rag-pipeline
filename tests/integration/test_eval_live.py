@@ -3,7 +3,7 @@
 不 mock:
 - 真实 embedding: ``live_embed_model`` fixture
 - 真实 PG: 真实 dataset + chunk
-- 真实 build_full_pipeline (5f) + EvalRunner (5h)
+- 真实 build_search_pipeline (5f) + EvalRunner (5h)
 - LLM: mock (eval 关注 retrieval, 不需要 LLM 质量)
 
 场景:
@@ -32,7 +32,7 @@ from rag.eval.runner import EvalRunner
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
-from rag.pipeline.full import PipelineDeps, build_full_pipeline
+from rag.search.factory import SearchPipelineDeps, build_search_pipeline
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -65,17 +65,14 @@ async def _seed_chunks_with_real_embeddings(
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     chunks: list[ChunkModel] = []
     for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id, text=content, embedding=emb
-        )
+        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -129,8 +126,8 @@ async def test_real_eval_perfect_match_recall_one(
         encoding="utf-8",
     )
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
     runner = EvalRunner(pipeline=pipeline.ainvoke)
 
     summary = await runner.run(eval_path)
@@ -176,8 +173,8 @@ async def test_real_eval_zero_match_recall_zero(
         encoding="utf-8",
     )
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
     runner = EvalRunner(pipeline=pipeline.ainvoke)
 
     summary = await runner.run(eval_path)
@@ -240,8 +237,8 @@ async def test_real_eval_multiple_queries_aggregate(
         for r in eval_records:
             f.write(json.dumps(r) + "\n")
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
     runner = EvalRunner(pipeline=pipeline.ainvoke)
 
     summary = await runner.run(eval_path)
@@ -292,8 +289,8 @@ async def test_real_eval_hit_rate_at_k(
         encoding="utf-8",
     )
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
     runner = EvalRunner(pipeline=pipeline.ainvoke)
 
     summary = await runner.run(eval_path)

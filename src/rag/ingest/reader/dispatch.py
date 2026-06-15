@@ -26,7 +26,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 
-from rag.domain.enums import Datasource
+from rag.domain.enums import IngestDatasource
 from rag.error_codes import ReaderErrorCode
 from rag.exception import RAGError
 from rag.ingest.reader.extensions import (
@@ -68,7 +68,7 @@ async def dispatch_bytes(
     source: str,
     *,
     encoding: str = "utf-8",
-    datasource: Datasource = "file",
+    datasource: IngestDatasource = "file",
     filename: str | None = None,
     upload_file: UploadFileHandler | None = None,
 ) -> TextDoc:
@@ -79,7 +79,7 @@ async def dispatch_bytes(
         extension: 后缀 (无 `.` 前缀, 已 lowercase)
         source: 来源标识 ('file:///abs/path' 或 'https://...')
         encoding: 文本类 adapter 的字符编码
-        datasource: 'file' | 'url' | 'api' (来自 rag.domain.enums.Datasource)
+        datasource: 'file' | 'url' (来自 rag.domain.enums.IngestDatasource)
         filename: 展示用文件名
         upload_file: 可选, async 上传回调 (docx 内嵌图, html base64 图)
 

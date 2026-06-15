@@ -30,10 +30,10 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.cite import SimpleCite
-from rag.pipeline.orchestrator import PipelineOrchestrator
-from rag.pipeline.parent_doc import NoOpParentDoc, ParentDocExpander
-from rag.pipeline.subgraph import SearchSubgraph
+from rag.search.orchestrator import SearchPipeline
+from rag.search.post.cite import SimpleCite
+from rag.search.post.parent_doc import NoOpParentDoc, ParentDocExpander
+from rag.search.retrieve.subgraph import SearchSubgraph
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -43,9 +43,7 @@ EMBED_DIM: int = settings.openai_embedding_dim
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str
-) -> uuid.UUID:
+async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
     ds = DatasetModel(
         id=uuid.uuid4(),
         name=name,
@@ -82,10 +80,7 @@ async def _seed_chunk(
     db_session.add(chunk)
     await db_session.flush()
     await db_session.execute(
-        text(
-            "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-            "WHERE id = :id"
-        ),
+        text("UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"),
         {"t": ChineseTokenizer().build_tsvector(chunk_text), "id": chunk.id},
     )
     await db_session.commit()
@@ -123,9 +118,7 @@ class _RepoRetriever:
             if self.mode == "vector":
                 assert self.embed_model is not None
                 query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(
-                    query_emb, self.dataset_id, top_k
-                )
+                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
             elif self.mode == "fulltext":
                 rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
             else:
@@ -173,13 +166,13 @@ def _make_subgraph(
 ) -> SearchSubgraph:
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(
+        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=_RepoRetriever(
+        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",
@@ -188,9 +181,7 @@ def _make_subgraph(
     )
 
 
-def _make_scored(
-    chunk: ChunkModel, *, score: float = 0.5
-) -> ScoredDocument:
+def _make_scored(chunk: ChunkModel, *, score: float = 0.5) -> ScoredDocument:
     """Construct ScoredDocument from ChunkModel (for direct ParentDoc tests)."""
     return ScoredDocument(
         chunk_id=chunk.id,
@@ -246,9 +237,7 @@ async def test_real_parent_doc_expand_to_window(
     # 构造 ParentDocExpander (独立于 orchestrator, 直接验证)
     async with pg_session_factory() as session:
         repo = ChunkRepository(session)
-        expander = ParentDocExpander(
-            chunk_repo=repo, default_window=2
-        )
+        expander = ParentDocExpander(chunk_repo=repo, default_window=2)
         result = await expander(
             [_make_scored(matched, score=0.9)],
             _req_with_window(2),
@@ -414,9 +403,7 @@ async def test_real_parent_doc_overlapping_windows_dedup(
 
     async with pg_session_factory() as session:
         repo = ChunkRepository(session)
-        expander = ParentDocExpander(
-            chunk_repo=repo, default_window=2
-        )
+        expander = ParentDocExpander(chunk_repo=repo, default_window=2)
         result = await expander(
             [
                 _make_scored(chunks[2], score=0.9),
@@ -485,7 +472,7 @@ async def test_real_orchestrator_with_parent_doc_full_chain(
     # 才能调 chunk_repo.get_siblings。这是一个未来 5f 的工程问题
     # (orchestrator 注入 session 或 RepositoryPool), 当前 task 范围内:
     # 仅验证 parent_doc 不被注入时的 NoOp 路径在 orchestrator 中能 work
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs=subgraphs,
         parent_doc=NoOpParentDoc(),
         cite=SimpleCite(),
@@ -499,9 +486,9 @@ async def test_real_orchestrator_with_parent_doc_full_chain(
     # citations 仍然从 _intermediate_hits 生成
     assert len(result.citations) == len(result._intermediate_hits)
     # 无 parent 扩展副作用
-    assert all(
-        c.position is None for c in result.citations
-    ), "NoOp parent_doc 路径不应触发 position 解析"
+    assert all(c.position is None for c in result.citations), (
+        "NoOp parent_doc 路径不应触发 position 解析"
+    )
 
 
 def _req_with_window(parent_doc_window: int) -> SearchRequest:

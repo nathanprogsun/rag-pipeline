@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.filter`` per Contract 2 of
+"""Unit tests for ``rag.search.post.filter`` per Contract 2 of
 ``.agents/design/2026-06-14-cross-task-contracts.md``.
 
 Uses a FakeTokenizer to keep tests deterministic and offline.
@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import cast
+
+from tokenizers import Tokenizer
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
-from rag.pipeline.filter import (
+from rag.infra.observability.trace import RetrievalTrace, ScoredDocumentLike
+from rag.search.post.filter import (
     DEFAULT_TOKEN_BUDGET,
     filter_by_score,
     filter_by_token_budget,
     remove_duplicates,  # re-export
 )
-from rag.retrieval.trace import RetrievalTrace
 
 # ---------- FakeTokenizer (deterministic, offline) ----------
 
@@ -44,9 +47,9 @@ class FakeTokenizer:
 
 
 # 1 char -> 1 token (predictable per-char counting)
-_FAKE_1C1T = FakeTokenizer(tokens_per_char=1.0)
+_FAKE_1C1T = cast(Tokenizer, FakeTokenizer(tokens_per_char=1.0))
 # 4 chars -> 1 token (matches old heuristic for comparison tests)
-_FAKE_4C1T = FakeTokenizer(tokens_per_char=0.25)
+_FAKE_4C1T = cast(Tokenizer, FakeTokenizer(tokens_per_char=0.25))
 
 
 # ---------- Fixtures ----------
@@ -86,13 +89,15 @@ D = "00000000-0000-0000-0000-000000000004"
 
 
 def test_remove_duplicates_reexport_works() -> None:
-    """Re-export from rag.retrieval.trace is callable with the same signature."""
+    """Re-export from rag.infra.observability.trace is callable with the same signature."""
     a = _doc(A)
     b = _doc(B)
     t1 = RetrievalTrace(q="q1", a="a1")
     t2 = RetrievalTrace(q="q2", a="a2")
     t1_dup = RetrievalTrace(q="q1", a="a1")
-    result = remove_duplicates([a, b, a], [t1, t2, t1_dup])
+    result = remove_duplicates(
+        cast(list[ScoredDocumentLike], [a, b, a]), [t1, t2, t1_dup]
+    )
     assert len(result) == 2
     assert str(result[0].chunk_id) == A
     assert str(result[1].chunk_id) == B

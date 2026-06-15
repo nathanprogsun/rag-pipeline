@@ -174,7 +174,7 @@ async def xlsx_adapter(
         raw_text=raw_text,
         format_text=format_text,
         meta=DocMeta(
-            datasource="api",  # 占位, dispatch 覆盖
+            datasource="file",  # 占位, dispatch 覆盖
             mime=XLSX_MIME,
             encoding="utf-8",  # 二进制容器, encoding 概念不适用; 占位 utf-8
             size_bytes=len(buffer),

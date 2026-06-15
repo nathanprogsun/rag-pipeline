@@ -29,9 +29,9 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.orchestrator import PipelineOrchestrator
-from rag.pipeline.rerank import NoOpRerankStage, RerankStageAdapter
-from rag.pipeline.subgraph import SearchSubgraph
+from rag.search.orchestrator import SearchPipeline
+from rag.search.retrieve.rerank import NoOpRerankStage, RerankStageAdapter
+from rag.search.retrieve.subgraph import SearchSubgraph
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Live fixtures & helpers
@@ -121,9 +121,7 @@ async def test_real_rerank_stage_adapter_with_real_reranker(
         _scored_doc(uuid.uuid4(), text="Python 数据分析 pandas 入门", score=0.5),
         _scored_doc(uuid.uuid4(), text="Java 虚拟机 JVM 内存管理", score=0.4),
     ]
-    adapter = RerankStageAdapter(
-        reranker=live_rerank_model, rerank_weight=1.0
-    )
+    adapter = RerankStageAdapter(reranker=live_rerank_model, rerank_weight=1.0)
     result = await adapter(docs, _request(query="Python 列表推导式"))
 
     # rerank_score 被填充
@@ -154,9 +152,7 @@ async def test_real_rerank_image_caption_bypassed(
             modality="image_caption",
         ),
     ]
-    adapter = RerankStageAdapter(
-        reranker=live_rerank_model, rerank_weight=1.0
-    )
+    adapter = RerankStageAdapter(reranker=live_rerank_model, rerank_weight=1.0)
     result = await adapter(docs, _request(query="Python 列表推导式"))
 
     # 找 image chunk
@@ -179,9 +175,7 @@ async def test_real_rerank_weight_zero_preserves_text_ranking(
         _scored_doc(uuid.uuid4(), text="Alpha Python 教程", score=0.9),
         _scored_doc(uuid.uuid4(), text="Beta Java 教程", score=0.7),
     ]
-    adapter = RerankStageAdapter(
-        reranker=live_rerank_model, rerank_weight=0.0
-    )
+    adapter = RerankStageAdapter(reranker=live_rerank_model, rerank_weight=0.0)
     result = await adapter(docs, _request(query="Python 教程"))
 
     # 第一名仍是原始 score=0.9 的 Alpha (rerank 权重=0 不改变 RRF 顺序)
@@ -224,9 +218,7 @@ class _RepoRetriever:
             if self.mode == "vector":
                 assert self.embed_model is not None
                 query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(
-                    query_emb, self.dataset_id, top_k
-                )
+                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
             elif self.mode == "fulltext":
                 rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
             else:
@@ -274,13 +266,13 @@ def _make_subgraph(
 ) -> SearchSubgraph:
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(
+        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=_RepoRetriever(
+        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",
@@ -289,9 +281,7 @@ def _make_subgraph(
     )
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str
-) -> uuid.UUID:
+async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
     ds = DatasetModel(
         id=uuid.uuid4(),
         name=name,
@@ -313,17 +303,14 @@ async def _seed_chunks(
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     chunks: list[ChunkModel] = []
     for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id, text=content, embedding=emb
-        )
+        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -380,11 +367,9 @@ async def test_real_orchestrator_with_rerank_full_chain(
                 for i, d in enumerate(docs, start=1)
             ]
 
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs=subgraphs,
-        rerank=RerankStageAdapter(
-            reranker=live_rerank_model, rerank_weight=0.8
-        ),
+        rerank=RerankStageAdapter(reranker=live_rerank_model, rerank_weight=0.8),
         cite=SimpleCite(),
     )
 
@@ -424,12 +409,8 @@ async def test_real_noop_rerank_through_orchestrator(
             embed_model=live_embed_model,
         )
     }
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, rerank=NoOpRerankStage()
-    )
-    result = await orch.ainvoke(
-        SearchRequest(query="Python", dataset_ids=[ds])
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, rerank=NoOpRerankStage())
+    result = await orch.ainvoke(SearchRequest(query="Python", dataset_ids=[ds]))
 
     # NoOp: rerank_score 全部 None, score_breakdown 没有 "rerank" 键
     for d in result._intermediate_hits:

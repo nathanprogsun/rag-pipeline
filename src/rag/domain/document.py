@@ -48,7 +48,7 @@ class ScoredDocument(BaseModel):
              On duplicate sightings across groups, fusion takes ``max`` per source
              (对齐 FastGPT ``concatScore.find(type).value = max(...)`` 语义),
              so the original raw similarity per source survives RRF accumulation.
-    - (q, a) 溯源字段已迁出: 见 ``rag.retrieval.trace.RetrievalTrace``,
+    - (q, a) 溯源字段已迁出: 见 ``rag.infra.observability.trace.RetrievalTrace``,
              与 ``ScoredDocument`` 解耦, 只在去重 / 链路阶段按平行数组传入。
     """
 

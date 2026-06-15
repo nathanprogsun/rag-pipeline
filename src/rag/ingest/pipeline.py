@@ -18,11 +18,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-
-import httpx
 
 from rag.error_codes import ReaderErrorCode
 from rag.exception import RAGError
@@ -31,7 +28,6 @@ from rag.ingest.chunker.types import ChunkContext
 from rag.ingest.normalizer import NoOpNormalizer, Normalizer
 from rag.ingest.reader import dispatch_bytes, read_url
 from rag.ingest.source import (
-    ApiSource,
     BufferSource,
     FileSource,
     IngestSource,
@@ -78,39 +74,6 @@ def _build_context(text_doc: TextDoc) -> ChunkContext:
     return ChunkContext.from_meta(meta=text_doc.meta)
 
 
-def _extract_api_field(data: object, field_priority: tuple[str, ...]) -> str:
-    """按 field_priority 顺序抽字段: dict 取首条命中, list 拼接, 标量 str() 化。
-
-    dict 路径只取首个非空字符串字段 (不拼接多字段), list 路径按 ``text`` /
-    ``content`` 优先级逐项抽取并用空行 join, 命中失败的项用 ``json.dumps`` 兜底。
-    """
-    if isinstance(data, dict):
-        for key in field_priority:
-            value = data.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return json.dumps(data, ensure_ascii=False)
-    if isinstance(data, list):
-        # list 路径固定走 text / content 优先级 (与旧实现保持一致)
-        list_priority = ("text", "content")
-        parts: list[str] = []
-        for item in data:
-            if isinstance(item, dict):
-                picked = False
-                for key in list_priority:
-                    v = item.get(key)
-                    if isinstance(v, str) and v:
-                        parts.append(v)
-                        picked = True
-                        break
-                if not picked:
-                    parts.append(json.dumps(item, ensure_ascii=False))
-            else:
-                parts.append(str(item))
-        return "\n\n".join(parts)
-    return str(data)
-
-
 class IngestPipeline:
     def __init__(
         self,
@@ -135,7 +98,7 @@ class IngestPipeline:
         """IngestSource -> IngestResult: 全程 async。
 
         Args:
-            source: ``FileSource`` / ``UrlSource`` / ``BufferSource`` / ``ApiSource`` 四选一。
+            source: ``FileSource`` / ``UrlSource`` / ``BufferSource`` 三选一。
             get_format_text: 透传给 chunker, 决定 ``Chunk.text`` 是 ``format_text``
                 (csv/xlsx 的 md table 视图) 还是 ``raw_text``。默认 True。
 
@@ -159,15 +122,16 @@ class IngestPipeline:
             filename = source.source.rsplit("/", 1)[-1]
             if "." not in filename:
                 filename = f"{filename}.{source.file_type.lstrip('.')}"
+            # BufferSource 视为"已在内存中的文件流", datasource 归 file;
+            # 落库时由 ingest_to_stored_datasource 依据 source 前缀
+            # (manual:// / inline://) 决定是否改判为 manual。
             text_doc = await dispatch_bytes(
                 buffer=source.buf,
                 extension=source.file_type,
                 source=source.source,
-                datasource="api",
+                datasource="file",
                 filename=filename,
             )
-        elif isinstance(source, ApiSource):
-            text_doc = await self._fetch_api(source)
         else:
             raise TypeError(f"unsupported IngestSource: {type(source).__name__}")
 
@@ -208,98 +172,6 @@ class IngestPipeline:
             source=f"file://{p.resolve()}",
             datasource="file",
             filename=p.name,
-        )
-
-    # ── ApiSource 内部拉取 + 字段抽取 ─────────────────────────
-    async def _fetch_api(self, source: ApiSource) -> TextDoc:
-        """ApiSource -> TextDoc: 拉 JSON, 走 field_priority 抽字段。
-
-        错误码 (细分便于排查):
-          - READER_API_AUTH:   401/403
-          - READER_API_TIMEOUT: httpx.TimeoutException
-          - READER_API_STATUS:  其他非 2xx
-          - READER_PARSE:      JSON 解析失败 / 字段抽取全部为空
-        """
-        url = source.server_url.rstrip("/") + "/" + source.endpoint.lstrip("/")
-        headers = {"Accept": "application/json"}
-        if source.auth_token:
-            headers["Authorization"] = f"Bearer {source.auth_token}"
-        timeout = httpx.Timeout(
-            connect=10.0, read=source.timeout_s, write=10.0, pool=10.0
-        )
-
-        # 测试可注入 client; 真实场景由本方法内部 AsyncClient 承担。
-        # source.http_client 声明为 ``object`` 以避免 source.py 引入 httpx 依赖;
-        # 此处强制收窄到 httpx.AsyncClient, 注入契约由本方法保证。
-        owns_client = source.http_client is None
-        client: httpx.AsyncClient
-        if owns_client:
-            client = httpx.AsyncClient(follow_redirects=True, timeout=timeout)
-        else:
-            client = source.http_client  # type: ignore[assignment]
-
-        try:
-            try:
-                resp = await client.get(url, headers=headers)
-            except httpx.TimeoutException as e:
-                logger.warning("reader.api.timeout url=%s err=%s", url, e)
-                raise RAGError(
-                    code=ReaderErrorCode.API_TIMEOUT,
-                    message=f"{url}: api timeout: {e}",
-                ) from e
-            except httpx.HTTPError as e:
-                logger.warning("reader.api.fail url=%s err=%s", url, e)
-                raise RAGError(
-                    code=ReaderErrorCode.API_STATUS,
-                    message=f"{url}: api request failed: {e}",
-                ) from e
-
-            status = resp.status_code
-            if status in (401, 403):
-                raise RAGError(
-                    code=ReaderErrorCode.API_AUTH,
-                    message=f"{url}: api auth failed: HTTP {status}",
-                )
-            if status >= 400:
-                raise RAGError(
-                    code=ReaderErrorCode.API_STATUS,
-                    message=f"{url}: api status: HTTP {status}",
-                )
-
-            body = resp.content
-            if len(body) > source.max_size:
-                raise RAGError(
-                    code=ReaderErrorCode.TOO_LARGE,
-                    message=f"{url}: api response too large: {len(body)} > {source.max_size}",
-                )
-
-            try:
-                data = json.loads(body.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raise RAGError(
-                    code=ReaderErrorCode.PARSE,
-                    message=f"{url}: api JSON parse failed: {e}",
-                ) from e
-        finally:
-            if owns_client:
-                await client.aclose()
-
-        extracted = _extract_api_field(data, source.field_priority)
-        if not extracted:
-            raise RAGError(
-                code=ReaderErrorCode.PARSE,
-                message=f"{url}: api JSON had no non-empty field in {source.field_priority}",
-            )
-
-        full_source = url
-        return TextDoc(
-            text=extracted,
-            meta=DocMeta(
-                datasource="api",
-                source=full_source,
-                mime="application/json",
-                size_bytes=len(body),
-            ),
         )
 
     # ── 内部统一: 两段串联 ─────────────────────────────────────

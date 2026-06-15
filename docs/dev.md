@@ -76,7 +76,6 @@ tests/
 ├── integration/         # ~50 integration tests (real PG + real DashScope)
 └── data/                # Test fixtures
 
-project-template/        # 5k: skeleton for new projects
 deploy/                  # (deprecated, see Dockerfile + docker-compose.yml at root)
 docs/                    # This file
 .github/workflows/       # CI (5j)
@@ -98,4 +97,3 @@ docs/                    # This file
 - [`README.md`](../README.md) — full project overview
 - [`AGENTS.md`](../AGENTS.md) — Claude/agent instructions for this repo
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — CI pipeline (5j)
-- [`project-template/`](../project-template/) — skeleton for new projects (5k)

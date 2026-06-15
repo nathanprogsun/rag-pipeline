@@ -83,7 +83,7 @@ async def html_adapter(
         raw_text=markdown,
         format_text=None,  # Section 6.3 明确: 只 raw_text, 无 format_text
         meta=DocMeta(
-            datasource="api",  # 占位, dispatch 覆盖
+            datasource="file",  # 占位, dispatch 覆盖
             mime=HTML_MIME,
             encoding=encoding,
             size_bytes=len(buffer),

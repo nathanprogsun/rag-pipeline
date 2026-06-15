@@ -25,7 +25,7 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.subgraph import (
+from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
     SearchSubgraph,
 )
@@ -78,7 +78,7 @@ class _RepoRetriever(Runnable):
         self.mode = mode
         self.embed_model = embed_model
 
-    async def ainvoke(  # type: ignore[override]
+    async def ainvoke(
         self,
         input: dict[str, object],
         config: object = None,
@@ -122,7 +122,7 @@ class _RepoRetriever(Runnable):
                 for i, (chunk, score) in enumerate(rows)
             ]
 
-    def invoke(  # type: ignore[override]
+    def invoke(
         self,
         input: dict[str, object],
         config: object = None,

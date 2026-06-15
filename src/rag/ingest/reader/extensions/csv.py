@@ -142,7 +142,7 @@ async def csv_adapter(
         raw_text=raw_text,
         format_text=format_text,
         meta=DocMeta(
-            datasource="api",  # 占位, dispatch 覆盖
+            datasource="file",  # 占位, dispatch 覆盖
             mime=CSV_MIME,
             encoding=encoding,
             size_bytes=len(buffer),

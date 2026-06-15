@@ -88,7 +88,7 @@ class EvalRunner:
 
     Args:
         pipeline: callable ``(SearchRequest) -> Awaitable[SearchResult]``
-            (typically ``build_full_pipeline(deps).ainvoke``).
+            (typically ``build_search_pipeline(deps).ainvoke``).
         metrics: list of metric "templates" to compute. Default: ``recall``,
             ``precision``, ``hit_rate``, ``mrr``, ``ndcg`` (without ``@k``
             suffix → k is filled in per-record).
@@ -174,9 +174,7 @@ class EvalRunner:
 
         # Aggregate per actual metric name (records may have different k,
         # leading to different metric name keys)
-        all_metric_names = sorted(
-            {name for r in results for name in r.metrics.keys()}
-        )
+        all_metric_names = sorted({name for r in results for name in r.metrics.keys()})
         aggregates: dict[str, dict[str, float]] = {}
         for metric_name in all_metric_names:
             values = [r.metrics.get(metric_name, 0.0) for r in results]
@@ -190,7 +188,9 @@ class EvalRunner:
 
         if output_path is not None:
             output_path.write_text(
-                json.dumps(summary.model_dump(mode="json"), indent=2, ensure_ascii=False),
+                json.dumps(
+                    summary.model_dump(mode="json"), indent=2, ensure_ascii=False
+                ),
                 encoding="utf-8",
             )
 

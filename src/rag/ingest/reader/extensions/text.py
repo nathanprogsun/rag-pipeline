@@ -64,7 +64,7 @@ async def text_adapter(
         format_text=None,
         images=[],
         meta=DocMeta(
-            datasource="api",  # 占位, dispatch 覆盖
+            datasource="file",  # 占位, dispatch 覆盖
             mime=TEXT_MIME,
             encoding=encoding,
             size_bytes=len(buffer),

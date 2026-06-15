@@ -30,13 +30,13 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.cite import (
-    SimpleCite,
+from rag.infra.text.citation_check import (
     parse_inline_citations,
     resolve_citation_positions,
 )
-from rag.pipeline.orchestrator import PipelineOrchestrator
-from rag.pipeline.subgraph import SearchSubgraph
+from rag.search.orchestrator import SearchPipeline
+from rag.search.post.cite import SimpleCite
+from rag.search.retrieve.subgraph import SearchSubgraph
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -46,9 +46,7 @@ EMBED_DIM: int = settings.openai_embedding_dim
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str
-) -> uuid.UUID:
+async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
     ds = DatasetModel(
         id=uuid.uuid4(),
         name=name,
@@ -71,17 +69,14 @@ async def _seed_chunks(
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     chunks: list[ChunkModel] = []
     for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id, text=content, embedding=emb
-        )
+        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -120,9 +115,7 @@ class _RepoRetriever:
             if self.mode == "vector":
                 assert self.embed_model is not None
                 query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(
-                    query_emb, self.dataset_id, top_k
-                )
+                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
             elif self.mode == "fulltext":
                 rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
             else:
@@ -170,13 +163,13 @@ def _make_subgraph(
 ) -> SearchSubgraph:
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(
+        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=_RepoRetriever(
+        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",
@@ -219,7 +212,7 @@ async def test_real_cite_through_orchestrator(
             top_k=3,
         )
     }
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs=subgraphs,
         cite=SimpleCite(),
     )
@@ -253,11 +246,11 @@ async def test_real_cite_image_caption_preserves_image_path(
     image_path 从 ScoredDocument 正确传到 Citation。
     """
     ds = await _create_dataset(db_session, "cite-img")
-    text_emb = (
-        await live_embed_model.aembed_documents(["Python 教程 列表推导式"])
-    )[0]
+    text_emb = (await live_embed_model.aembed_documents(["Python 教程 列表推导式"]))[0]
     img_emb = (
-        await live_embed_model.aembed_documents(["(image caption) Python 列表推导式代码截图"])
+        await live_embed_model.aembed_documents(
+            ["(image caption) Python 列表推导式代码截图"]
+        )
     )[0]
 
     text_chunk = ChunkModel(
@@ -275,8 +268,7 @@ async def test_real_cite_image_caption_preserves_image_path(
     for chunk in [text_chunk, img_chunk]:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -290,18 +282,14 @@ async def test_real_cite_image_caption_preserves_image_path(
             top_k=10,
         )
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, cite=SimpleCite())
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite())
     result = await orch.ainvoke(
         SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
     )
 
     # 找到 image_caption citation
     img_cite = next(
-        (
-            c
-            for c in result.citations
-            if c.image_path is not None
-        ),
+        (c for c in result.citations if c.image_path is not None),
         None,
     )
     assert img_cite is not None, "image_caption citation 未保留 image_path"
@@ -336,7 +324,7 @@ async def test_real_cite_with_custom_source_name_fn(
             top_k=5,
         )
     }
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs=subgraphs, cite=SimpleCite(source_name_fn=name_with_dataset)
     )
     result = await orch.ainvoke(
@@ -387,10 +375,8 @@ async def test_real_cite_two_datasets_ordered_1_based(
             top_k=5,
         ),
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, cite=SimpleCite())
-    result = await orch.ainvoke(
-        SearchRequest(query="Python", dataset_ids=[ds_a, ds_b])
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite())
+    result = await orch.ainvoke(SearchRequest(query="Python", dataset_ids=[ds_a, ds_b]))
 
     # 1-based 严格递增
     for i, c in enumerate(result.citations, start=1):
@@ -430,11 +416,8 @@ async def test_real_cite_round_trip_with_gen_emitting_markers(
         """Mock gen: 引用前 2 个 citation, emit [1](CITE) [2](CITE)。"""
         if not citations:
             return "no content"
-        return (
-            f"基于 {len(citations)} 条引用回答: "
-            + " ".join(
-                f"[{c.source_name.split('-')[-1]}](CITE)" for c in citations[:2]
-            )
+        return f"基于 {len(citations)} 条引用回答: " + " ".join(
+            f"[{c.source_name.split('-')[-1]}](CITE)" for c in citations[:2]
         )
 
     subgraphs = {
@@ -445,9 +428,7 @@ async def test_real_cite_round_trip_with_gen_emitting_markers(
             top_k=5,
         )
     }
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, cite=SimpleCite(), gen=marker_gen
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite(), gen=marker_gen)
     result = await orch.ainvoke(
         SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
     )
@@ -481,9 +462,7 @@ async def test_real_cite_empty_dataset_yields_empty_citations(
             embed_model=live_embed_model,
         )
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, cite=SimpleCite())
-    result = await orch.ainvoke(
-        SearchRequest(query="anything", dataset_ids=[ds])
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite())
+    result = await orch.ainvoke(SearchRequest(query="anything", dataset_ids=[ds]))
     assert result.citations == []
     assert result._intermediate_hits == []

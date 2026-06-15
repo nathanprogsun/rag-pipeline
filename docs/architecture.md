@@ -16,7 +16,7 @@ docstrings; for entry points see [`dev.md`](dev.md).
 │   Ingest     │  │   Search Pipeline   │  │    Eval Pipeline     │
 │  (pre-M1)    │  │       (5a-5f)       │  │       (5h-5i)       │
 │              │  │                     │  │                     │
-│ FileSource   │  │ PipelineOrchestrator│  │ EvalRunner           │
+│ FileSource   │  │ SearchPipeline      │  │ EvalRunner           │
 │ UrlSource    │  │   ├ 1 QueryExt      │  │   ├ Metrics:         │
 │ Normalizer   │  │   ├ 2 Subgraph×N    │  │   │  recall/precision│
 │ Chunker      │  │   │   (intra-fuse)  │  │   │  hit_rate/mrr/    │
@@ -105,14 +105,14 @@ docstrings; for entry points see [`dev.md`](dev.md).
 
 | Contract | Implementation | Notes |
 |---|---|---|
-| 1 intra_fusion signature | `rag.pipeline.fusion.intra_fusion` | query-variant semantics |
-| 2 score_breakdown semantics | `rag.pipeline.filter.filter_by_score` | per-source max merge |
-| 3 typed Pipeline.ainvoke | `rag.pipeline.full.build_full_pipeline` | PipelineDeps + Pipeline Protocol |
-| 4 SearchResult.response | `rag.pipeline.orchestrator` | LLM answer, not prompt |
-| 5 [id](CITE) inline | `rag.pipeline.cite.SimpleCite` + parse | 1-based |
+| 1 intra_fusion signature | `rag.search.retrieve.fusion.intra_fusion` | query-variant semantics |
+| 2 score_breakdown semantics | `rag.search.post.filter.filter_by_score` | per-source max merge |
+| 3 typed Pipeline.ainvoke | `rag.search.factory.build_search_pipeline` | SearchPipelineDeps + Pipeline Protocol |
+| 4 SearchResult.response | `rag.search.orchestrator` | LLM answer, not prompt |
+| 5 [id](CITE) inline | `rag.search.post.cite.SimpleCite` + `rag.infra.text.citation_check` parser | 1-based |
 | 6 _intermediate_hits | `rag.domain.search.SearchResult` | PrivateAttr, excluded from JSON |
 | 7 with_cache removed | N/A | direct Cache.get/set instead |
-| 8 stage ordering | `rag.pipeline.orchestrator.ainvoke` | rerank pre-inter-fuse |
+| 8 stage ordering | `rag.search.orchestrator.ainvoke` | rerank pre-inter-fuse |
 | 9 QueryDecomposer dropped | N/A | only QueryExtension |
 
 See [`../.agents/design/2026-06-14-cross-task-contracts.md`](../.agents/design/2026-06-14-cross-task-contracts.md)
@@ -163,7 +163,6 @@ GitHub Actions at [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 
 - [`Dockerfile`](../Dockerfile) — multi-stage Python 3.13 + uv + pgvector
 - [`docker-compose.yml`](../docker-compose.yml) — pg + redis + ad-hoc CLI runner
-- [`project-template/`](../project-template/) — skeleton for new projects
 
 ## See also
 

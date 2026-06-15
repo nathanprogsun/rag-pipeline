@@ -1,8 +1,8 @@
-"""Unit tests for ``rag.pipeline.full`` (5f).
+"""Unit tests for ``rag.search.factory`` (5f).
 
 Tests cover Contract 3 typed I/O:
-- PipelineDeps validation (frozen, required fields, defaults)
-- build_full_pipeline returns a Pipeline object
+- SearchPipelineDeps validation (frozen, required fields, defaults)
+- build_search_pipeline returns a Pipeline object
 - Pipeline.ainvoke(SearchRequest) -> SearchResult contract
 - make_llm_gen constructs GenFn with correct prompt structure
 - LLM failure → fallback response
@@ -23,15 +23,15 @@ from pydantic import ValidationError
 
 from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest, SearchResult
-from rag.pipeline.full import (
-    PipelineDeps,
-    build_full_pipeline,
+from rag.search.factory import (
+    SearchPipelineDeps,
+    build_search_pipeline,
     make_llm_gen,
 )
 
 
 class _FakeEmbeddings(Embeddings):
-    """Minimal embedder for PipelineDeps validation."""
+    """Minimal embedder for SearchPipelineDeps validation."""
 
     async def aembed_query(self, text: str) -> list[float]:
         return [0.0] * 1536
@@ -50,18 +50,18 @@ def _req(query: str = "test") -> SearchRequest:
     return SearchRequest(query=query, dataset_ids=[uuid.uuid4()])
 
 
-# ---------- PipelineDeps ----------
+# ---------- SearchPipelineDeps ----------
 
 
 def test_deps_required_fields() -> None:
     """embedder + llm are required."""
-    deps = PipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
     assert deps.embedder is not None
     assert deps.llm is not None
 
 
 def test_deps_defaults() -> None:
-    deps = PipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
     assert deps.vector_weight == 0.7
     assert deps.fulltext_weight == 0.3
     assert deps.rrf_k == 60
@@ -74,7 +74,7 @@ def test_deps_defaults() -> None:
 
 def test_deps_optional_rerank_client() -> None:
     rerank = MagicMock()
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(), llm=MagicMock(), rerank_client=rerank
     )
     assert deps.rerank_client is rerank
@@ -82,7 +82,7 @@ def test_deps_optional_rerank_client() -> None:
 
 def test_deps_optional_audit_tap() -> None:
     audit = MagicMock()
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(), llm=MagicMock(), audit_tap=audit
     )
     assert deps.audit_tap is audit
@@ -90,39 +90,39 @@ def test_deps_optional_audit_tap() -> None:
 
 def test_deps_is_frozen() -> None:
     """Pydantic frozen=True: attribute assignment raises."""
-    deps = PipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
     with pytest.raises(ValidationError, match="frozen"):
         deps.top_k = 20  # type: ignore[misc]
 
 
-# ---------- build_full_pipeline ----------
+# ---------- build_search_pipeline ----------
 
 
 def test_build_returns_pipeline_instance() -> None:
-    deps = PipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    pipeline = build_search_pipeline(deps)
     # Pipeline 暴露 ainvoke 方法
     assert hasattr(pipeline, "ainvoke")
     assert callable(pipeline.ainvoke)
 
 
 def test_build_with_rerank() -> None:
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(),
         llm=MagicMock(),
         rerank_client=MagicMock(),
     )
-    pipeline = build_full_pipeline(deps)
+    pipeline = build_search_pipeline(deps)
     assert pipeline is not None
 
 
 def test_build_with_audit_tap() -> None:
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(),
         llm=MagicMock(),
         audit_tap=MagicMock(),
     )
-    pipeline = build_full_pipeline(deps)
+    pipeline = build_search_pipeline(deps)
     assert pipeline is not None
 
 
@@ -261,22 +261,26 @@ async def test_pipeline_ainvoke_returns_search_result(
     """Pipeline.ainvoke(SearchRequest) → SearchResult with _intermediate_hits."""
 
     # Mock VectorRetriever / FulltextRetriever at import time
-    async def _mock_search_vector(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_vector(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         from rag.domain.document import ChunkMetadata, ScoredDocument
 
         return [
             ScoredDocument(
                 chunk_id=uuid.uuid4(),
-                dataset_id=self.dataset_id,
+                dataset_id=self.dataset_id,  # type: ignore[attr-defined]
                 text="hello",
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),
+                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),  # type: ignore[attr-defined]
             )
         ]
 
-    async def _mock_search_fulltext(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_fulltext(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         return []
 
     monkeypatch.setattr(
@@ -294,8 +298,8 @@ async def test_pipeline_ainvoke_returns_search_result(
     ai.content = "response [1](CITE)"
     llm.ainvoke = AsyncMock(return_value=ai)
 
-    deps = PipelineDeps(embedder=_FakeEmbeddings(), llm=llm)
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=llm)
+    pipeline = build_search_pipeline(deps)
     req = _req(query="hello")
 
     result = await pipeline.ainvoke(req)
@@ -313,22 +317,26 @@ async def test_pipeline_ainvoke_records_audit_when_req_audit_true(
     """req.audit=True + audit_tap 配置 → NDJSON 写入。"""
 
     # Mock retrievers
-    async def _mock_search_vector(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_vector(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         from rag.domain.document import ChunkMetadata
 
         return [
             ScoredDocument(
                 chunk_id=uuid.uuid4(),
-                dataset_id=self.dataset_id,
+                dataset_id=self.dataset_id,  # type: ignore[attr-defined]
                 text="hello",
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),
+                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),  # type: ignore[attr-defined]
             )
         ]
 
-    async def _mock_search_fulltext(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_fulltext(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         return []
 
     monkeypatch.setattr(
@@ -347,14 +355,14 @@ async def test_pipeline_ainvoke_records_audit_when_req_audit_true(
     llm.ainvoke = AsyncMock(return_value=ai)
 
     audit_path = tmp_path / "audit.jsonl"
-    from rag.retrieval.audit import AuditTap
+    from rag.infra.observability.audit import AuditTap
 
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(),
         llm=llm,
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_full_pipeline(deps)
+    pipeline = build_search_pipeline(deps)
     req = SearchRequest(
         query="hello",
         dataset_ids=[uuid.uuid4()],
@@ -378,10 +386,14 @@ async def test_pipeline_ainvoke_skips_audit_when_req_audit_false(
 ) -> None:
     """req.audit=False → 即使 audit_tap 配置也不写。"""
 
-    async def _mock_search_vector(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_vector(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         return []
 
-    async def _mock_search_fulltext(self: object, query: str, top_k: int = 10) -> list[ScoredDocument]:
+    async def _mock_search_fulltext(
+        self: object, query: str, top_k: int = 10
+    ) -> list[ScoredDocument]:
         return []
 
     monkeypatch.setattr(
@@ -399,14 +411,14 @@ async def test_pipeline_ainvoke_skips_audit_when_req_audit_false(
     llm.ainvoke = AsyncMock(return_value=ai)
 
     audit_path = tmp_path / "audit.jsonl"
-    from rag.retrieval.audit import AuditTap
+    from rag.infra.observability.audit import AuditTap
 
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=_FakeEmbeddings(),
         llm=llm,
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_full_pipeline(deps)
+    pipeline = build_search_pipeline(deps)
     req = _req()  # audit defaults to False
 
     await pipeline.ainvoke(req)

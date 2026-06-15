@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.query_ext`` per Contract 9 of
+"""Unit tests for ``rag.search.extension.query_ext`` per Contract 9 of
 ``.agents/design/2026-06-14-cross-task-contracts.md`` + FastGPT alignment
 (2026-06-14 audit).
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from rag.pipeline.query_ext import (
+from rag.search.extension.query_ext import (
     QueryExtensionResult,
     QueryExtensionRunnable,
     QueryExtensionVariants,
@@ -363,9 +363,9 @@ def test_default_constructor_uses_get_structured_chat_model() -> None:
     QueryExtensionVariants schema is the structured output target.
     """
     ext = QueryExtensionRunnable(model="test", llm=FakeStructuredLLM())
-    assert ext._llm is not None  # type: ignore[attr-defined]
+    assert ext._llm is not None
     assert hasattr(ext._llm, "invoke")
-    result = ext._llm.invoke([{"role": "user", "content": "no match"}])  # type: ignore[attr-defined]
+    result = ext._llm.invoke([{"role": "user", "content": "no match"}])
     assert isinstance(result, QueryExtensionVariants)
 
 

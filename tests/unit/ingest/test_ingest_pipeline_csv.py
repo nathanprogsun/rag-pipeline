@@ -67,7 +67,7 @@ def test_pipeline_csv_via_buffer_source() -> None:
     )
 
     assert result.chunks
-    assert result.doc_meta.datasource == "api"
+    assert result.doc_meta.datasource == "file"
     assert result.doc_meta.filename == "data.csv"
     assert result.doc_meta.size_bytes == len(csv_data)
     # csv 内容进 chunks

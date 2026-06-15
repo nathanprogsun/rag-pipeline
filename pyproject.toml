@@ -34,7 +34,7 @@ dependencies = [
 
 [project.scripts]
 rag-ingest = "rag.ingest.cli:main"
-rag-search = "rag.pipeline.cli:main"
+rag-search = "rag.search.cli:main"
 rag-eval = "rag.eval.cli:main"
 
 [build-system]
@@ -52,9 +52,10 @@ branch = false
 # Project-wide 80% coverage gate, enforced by --cov-fail-under=80 in CI.
 # Current baseline (2026-06): 92%.
 # Per-module targets (tighter on critical paths):
-#   - rag.pipeline.*           ≥90% (orchestration correctness)
+#   - rag.search.*             ≥90% (orchestration correctness)
 #   - rag.eval.metrics/runner  ≥90% (eval accuracy)
-#   - rag.retrieval.*          ≥85% (audit + cite correctness)
+#   - rag.infra.observability.* ≥85% (audit correctness)
+#   - rag.infra.text.*         ≥85% (cite marker correctness)
 fail_under = 80
 exclude_lines = [
     "pragma: no cover",

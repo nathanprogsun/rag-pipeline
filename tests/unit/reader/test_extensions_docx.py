@@ -97,7 +97,7 @@ async def test_docx_extension_adapter_minimal() -> None:
     assert result.meta.mime == DOCX_MIME
     assert result.meta.encoding == "utf-8"
     assert result.meta.size_bytes == len(buf)
-    assert result.meta.datasource == "api"
+    assert result.meta.datasource == "file"
     # 没图, images 必空
     assert result.images == []
     # docx 适配器只返 raw_text, 不返 format_text

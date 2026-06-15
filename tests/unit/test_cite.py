@@ -1,4 +1,5 @@
-"""Unit tests for ``rag.pipeline.cite`` (stage 9).
+"""Unit tests for ``rag.search.post.cite`` (stage 9) and
+``rag.infra.text.citation_check`` (marker parsing + validation).
 
 Tests cover Contract 5:
 - SimpleCite numbers docs 1-based and builds Citation DTOs
@@ -13,11 +14,11 @@ import uuid
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import Citation, SearchRequest
-from rag.pipeline.cite import (
-    SimpleCite,
+from rag.infra.text.citation_check import (
     parse_inline_citations,
     resolve_citation_positions,
 )
+from rag.search.post.cite import SimpleCite
 
 # ---------- Fixtures ----------
 

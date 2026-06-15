@@ -19,7 +19,7 @@ from rag.infra.llm.tokenizer import (
     count_tokens,
     load_minimax_m3_tokenizer,
 )
-from rag.pipeline.filter import DEFAULT_TOKEN_BUDGET, filter_by_token_budget
+from rag.search.post.filter import DEFAULT_TOKEN_BUDGET, filter_by_token_budget
 
 
 def _doc(text: str) -> ScoredDocument:

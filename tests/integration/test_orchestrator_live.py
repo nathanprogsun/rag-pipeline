@@ -1,4 +1,4 @@
-"""PipelineOrchestrator 集成测试 — 真实 PG + 真实 embedding + 真实链路。
+"""SearchPipeline 集成测试 — 真实 PG + 真实 embedding + 真实链路。
 
 不 mock 任何 LLM/embedding 路径: 使用 ``live_embed_model`` fixture
 (DashScope text-embedding-v3 / 1536 dim) 真实调 embedding API; chunk 入库
@@ -43,8 +43,8 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.orchestrator import PipelineOrchestrator
-from rag.pipeline.subgraph import SearchSubgraph
+from rag.search.orchestrator import SearchPipeline
+from rag.search.retrieve.subgraph import SearchSubgraph
 
 # 真实 embedding 维度: 与 settings.openai_embedding_dim 对齐
 EMBED_DIM: int = settings.openai_embedding_dim
@@ -116,8 +116,7 @@ async def _seed_chunks_with_real_embeddings(
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -195,9 +194,7 @@ class _RepoRetriever:
             if self.mode == "vector":
                 assert self.embed_model is not None
                 query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(
-                    query_emb, self.dataset_id, top_k
-                )
+                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
             elif self.mode == "fulltext":
                 rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
             else:
@@ -247,13 +244,13 @@ def _make_subgraph(
     """构造真实 SearchSubgraph (vector + fulltext 双路)。"""
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(
+        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=_RepoRetriever(
+        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",
@@ -292,7 +289,7 @@ async def test_real_two_datasets_relevant_content(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     result = await orch.ainvoke(
         SearchRequest(query="Python 教程", dataset_ids=list(ids.values()))
@@ -354,7 +351,7 @@ async def test_real_dataset_isolation(
             embed_model=live_embed_model,
         ),
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=[ds_python, ds_java])
@@ -398,12 +395,10 @@ async def test_real_missing_dataset_tracked(
             embed_model=live_embed_model,
         ),
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     result = await orch.ainvoke(
-        SearchRequest(
-            query="Python", dataset_ids=[registered_id, missing_id]
-        )
+        SearchRequest(query="Python", dataset_ids=[registered_id, missing_id])
     )
 
     # 缺失 dataset 计入 failed_dataset_ids
@@ -442,12 +437,12 @@ async def test_real_subgraph_exception_isolated(
         dataset_id=ids["ds-survivor"],
         embed_model=live_embed_model,
     )
-    broken_subgraph = _BrokenSubgraph()  # type: ignore[assignment]
+    broken_subgraph = _BrokenSubgraph()
 
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs={
             ids["ds-survivor"]: survivor_subgraph,
-            ids["ds-broken"]: broken_subgraph,
+            ids["ds-broken"]: broken_subgraph,  # type: ignore[dict-item]
         }
     )
     result = await orch.ainvoke(
@@ -455,9 +450,7 @@ async def test_real_subgraph_exception_isolated(
     )
 
     # ds-survivor 召回幸存
-    assert any(
-        d.dataset_id == ids["ds-survivor"] for d in result._intermediate_hits
-    )
+    assert any(d.dataset_id == ids["ds-survivor"] for d in result._intermediate_hits)
     # ds-broken 的错误进入 warnings
     assert any("subgraph_failed" in w for w in result.warnings)
     # failed_dataset_ids 仍为空 (subgraph 注册了, 只是运行时崩)
@@ -478,8 +471,7 @@ async def test_real_score_filter_drops_irrelevant(
         embed_model=live_embed_model,
         dataset_specs={
             "ds-mixed": (
-                CORPUS_PYTHON["python-tutorial"]
-                + CORPUS_PYTHON["java-tutorial"]
+                CORPUS_PYTHON["python-tutorial"] + CORPUS_PYTHON["java-tutorial"]
             ),
         },
     )
@@ -494,7 +486,7 @@ async def test_real_score_filter_drops_irrelevant(
     }
 
     # 先无阈值跑, 确认两边的 chunk 都召回 (top_k 足够)
-    orch_no_filter = PipelineOrchestrator(subgraphs=subgraphs)
+    orch_no_filter = SearchPipeline(subgraphs=subgraphs)
     result_no_filter = await orch_no_filter.ainvoke(
         SearchRequest(query="Python 教程", dataset_ids=list(ids.values()))
     )
@@ -513,7 +505,7 @@ async def test_real_score_filter_drops_irrelevant(
     sorted_scores = sorted(scores, reverse=True)
     median_threshold = sorted_scores[len(sorted_scores) // 2]
 
-    orch_filtered = PipelineOrchestrator(
+    orch_filtered = SearchPipeline(
         subgraphs=subgraphs,
         filter_score_threshold=median_threshold,
     )
@@ -555,7 +547,7 @@ async def test_real_token_budget_keeps_top(
         for ds_id in ids.values()
     }
     # 小 budget: 几百 token, 任何 chunk 都放不下, 长 chunk 优先被踢
-    orch = PipelineOrchestrator(subgraphs=subgraphs, token_budget=200)
+    orch = SearchPipeline(subgraphs=subgraphs, token_budget=200)
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=list(ids.values()))
     )
@@ -592,7 +584,7 @@ async def test_real_intermediate_hits_excluded_from_json(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=list(ids.values()))
@@ -624,8 +616,7 @@ async def test_real_chinese_semantic_search(
         embed_model=live_embed_model,
         dataset_specs={
             "ds-semantic": (
-                CORPUS_PYTHON["python-tutorial"]
-                + CORPUS_PYTHON["java-tutorial"]
+                CORPUS_PYTHON["python-tutorial"] + CORPUS_PYTHON["java-tutorial"]
             ),
         },
     )
@@ -638,7 +629,7 @@ async def test_real_chinese_semantic_search(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     result = await orch.ainvoke(
         SearchRequest(query="数据分析", dataset_ids=list(ids.values()))
@@ -692,7 +683,7 @@ async def test_real_with_cite_callback(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, cite=CiteCollector())
+    orch = SearchPipeline(subgraphs=subgraphs, cite=CiteCollector())
 
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=list(ids.values()))
@@ -759,9 +750,7 @@ async def test_real_with_gen_callback(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, cite=StubCite(), gen=real_gen
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=StubCite(), gen=real_gen)
 
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=list(ids.values()))
@@ -810,7 +799,7 @@ async def test_real_with_rerank_callback(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, rerank=rerank)
+    orch = SearchPipeline(subgraphs=subgraphs, rerank=rerank)
 
     result = await orch.ainvoke(
         SearchRequest(query="Python", dataset_ids=list(ids.values()))
@@ -821,10 +810,7 @@ async def test_real_with_rerank_callback(
     assert len(rerank.called_with) >= 1
     # 重排后顺序反转: 第一项应是原始最后一项
     if len(rerank.called_with) >= 2:
-        assert (
-            result._intermediate_hits[0].chunk_id
-            == rerank.called_with[-1].chunk_id
-        )
+        assert result._intermediate_hits[0].chunk_id == rerank.called_with[-1].chunk_id
 
 
 @pytest.mark.asyncio
@@ -877,7 +863,7 @@ async def test_real_full_chain_with_all_callbacks(
         )
         for ds_id in ids.values()
     }
-    orch = PipelineOrchestrator(
+    orch = SearchPipeline(
         subgraphs=subgraphs,
         filter_score_threshold=0.0,  # 全部保留 (真实 cosine 通常 > 0)
         token_budget=50_000,  # 50K token, 正常 chunk 都装得下

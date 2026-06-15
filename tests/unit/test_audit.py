@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.retrieval.audit`` (5e1).
+"""Unit tests for ``rag.infra.observability.audit`` (5e1).
 
 Tests cover:
 - AuditRecord.from_search_result captures all fields
@@ -20,7 +20,7 @@ import pytest
 
 from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest, SearchResult
-from rag.retrieval.audit import AuditRecord, AuditTap, read_jsonl_records
+from rag.infra.observability.audit import AuditRecord, AuditTap, read_jsonl_records
 
 
 def _req(*, query: str = "test") -> SearchRequest:
@@ -72,17 +72,13 @@ def test_audit_record_from_search_result_captures_response() -> None:
 
 
 def test_audit_record_from_search_result_captures_warnings() -> None:
-    rec = AuditRecord.from_search_result(
-        _req(), _result(warnings=["warn-1", "warn-2"])
-    )
+    rec = AuditRecord.from_search_result(_req(), _result(warnings=["warn-1", "warn-2"]))
     assert rec.warnings == ["warn-1", "warn-2"]
 
 
 def test_audit_record_from_search_result_captures_failed_dataset_ids() -> None:
     failed = uuid.uuid4()
-    rec = AuditRecord.from_search_result(
-        _req(), _result(failed=[failed])
-    )
+    rec = AuditRecord.from_search_result(_req(), _result(failed=[failed]))
     assert rec.failed_dataset_ids == [failed]
 
 
@@ -128,9 +124,7 @@ def test_audit_record_request_id_unique_per_call() -> None:
 
 
 def test_audit_record_request_id_override() -> None:
-    rec = AuditRecord.from_search_result(
-        _req(), _result(), request_id="custom-id-123"
-    )
+    rec = AuditRecord.from_search_result(_req(), _result(), request_id="custom-id-123")
     assert rec.request_id == "custom-id-123"
 
 
@@ -174,9 +168,7 @@ async def test_audit_tap_appends_multiple_records(tmp_path: Path) -> None:
     f = tmp_path / "audit.jsonl"
     tap = AuditTap(f, sample_rate=1.0, sync=True)
     for i in range(3):
-        await tap.record(
-            AuditRecord.from_search_result(_req(query=f"q{i}"), _result())
-        )
+        await tap.record(AuditRecord.from_search_result(_req(query=f"q{i}"), _result()))
     tap.close()
     lines = f.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 3
@@ -188,9 +180,7 @@ async def test_audit_tap_sample_rate_zero_drops_all(tmp_path: Path) -> None:
     f = tmp_path / "audit.jsonl"
     tap = AuditTap(f, sample_rate=0.0, sync=True)
     for _ in range(5):
-        recorded = await tap.record(
-            AuditRecord.from_search_result(_req(), _result())
-        )
+        recorded = await tap.record(AuditRecord.from_search_result(_req(), _result()))
         assert recorded is False
     tap.close()
     # No file content (file may not even exist if never written)
@@ -202,9 +192,7 @@ async def test_audit_tap_sample_rate_one_records_all(tmp_path: Path) -> None:
     f = tmp_path / "audit.jsonl"
     tap = AuditTap(f, sample_rate=1.0, sync=True)
     for _ in range(5):
-        recorded = await tap.record(
-            AuditRecord.from_search_result(_req(), _result())
-        )
+        recorded = await tap.record(AuditRecord.from_search_result(_req(), _result()))
         assert recorded is True
     tap.close()
     lines = f.read_text(encoding="utf-8").strip().split("\n")

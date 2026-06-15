@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.subgraph`` (per-dataset retrieval).
+"""Unit tests for ``rag.search.retrieve.subgraph`` (per-dataset retrieval).
 
 Tests use AsyncMock for retrievers (no DB, no network).
 """
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
-from rag.pipeline.subgraph import (
+from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
     SearchSubgraph,
     validate_subgraph_request,
@@ -70,8 +70,8 @@ def test_validate_dataset_id_not_uuid_raises() -> None:
     with pytest.raises(SearchRequestValidationError, match="dataset_id must be UUID"):
         validate_subgraph_request(
             query="hello",
-            dataset_id="not-a-uuid",
-            top_k=10,  # type: ignore[arg-type]
+            dataset_id="not-a-uuid",  # type: ignore[arg-type]
+            top_k=10,
         )
 
 

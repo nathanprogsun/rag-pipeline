@@ -46,8 +46,7 @@ htmlcov/
 # Documentation source (shipped in image via pyproject readme)
 docs/_build/
 
-# Project template + deployment assets
-project-template/
+# Deployment assets
 deploy/
 
 # Logs / temp

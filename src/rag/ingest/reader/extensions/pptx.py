@@ -69,7 +69,7 @@ async def pptx_adapter(
         raw_text=raw_text,
         format_text=None,
         meta=DocMeta(
-            datasource="api",
+            datasource="file",  # 占位, dispatch 覆盖
             mime=PPTX_MIME,
             encoding=encoding,
             size_bytes=len(buffer),

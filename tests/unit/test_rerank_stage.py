@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.rerank`` (stage 4+5).
+"""Unit tests for ``rag.search.retrieve.rerank`` (stage 4+5).
 
 Tests use AsyncMock / MagicMock for the underlying reranker (no network).
 Validates Contract 8 stage 4+5 invariants:
@@ -18,7 +18,7 @@ import pytest
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import SearchRequest
-from rag.pipeline.rerank import (
+from rag.search.retrieve.rerank import (
     NoOpRerankStage,
     RerankStageAdapter,
 )
@@ -278,11 +278,10 @@ async def test_adapter_calls_on_error_on_failure() -> None:
     docs = [_doc(A), _doc(B)]
     reranker = _make_reranker(side_effect=RuntimeError("oops"))
     on_error = AsyncMock()
-    adapter = RerankStageAdapter(
-        reranker=reranker, on_error=on_error
-    )
+    adapter = RerankStageAdapter(reranker=reranker, on_error=on_error)
     await adapter(docs, _req())
     on_error.assert_awaited_once()
+    assert on_error.await_args is not None
     args = on_error.await_args.args
     assert args[0] == docs
     assert isinstance(args[1], RuntimeError)
@@ -294,9 +293,7 @@ async def test_adapter_calls_on_error_on_failure() -> None:
 async def test_adapter_skips_bad_rerank_index() -> None:
     """Defensive: reranker 返越界 idx → 跳过该 pair。"""
     docs = [_doc(A), _doc(B)]
-    reranker = _make_reranker(
-        results=[(0, 0.9), (5, 0.8), (1, 0.7)]
-    )
+    reranker = _make_reranker(results=[(0, 0.9), (5, 0.8), (1, 0.7)])
     adapter = RerankStageAdapter(reranker=reranker, rerank_weight=1.0)
     result = await adapter(docs, _req())
     chunk_ids = {d.chunk_id for d in result}

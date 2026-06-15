@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.fusion`` per Contract 1 of
+"""Unit tests for ``rag.search.retrieve.fusion`` per Contract 1 of
 ``.agents/design/2026-06-14-cross-task-contracts.md``.
 """
 
@@ -11,7 +11,7 @@ import pytest
 
 from rag.domain.dataset import Dataset
 from rag.domain.document import ChunkMetadata, ScoredDocument
-from rag.pipeline.fusion import DEFAULT_RRF_K, intra_fusion
+from rag.search.retrieve.fusion import DEFAULT_RRF_K, intra_fusion
 
 # ---------- Fixtures ----------
 

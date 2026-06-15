@@ -38,7 +38,7 @@ def test_rag_error_renders_with_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """RAGError → 输出形如 ``ingest failed: [{code}] {message}``, 走 stderr。
 
     code 是排查关键信号: 没有它只能看到 ``PermissionError`` / ``httpx.ConnectError``
-    这种底层类别, 缺少 ``reader.not_found`` / ``reader.api_auth`` 等业务语义。
+    这种底层类别, 缺少 ``reader.not_found`` / ``reader.parse`` 等业务语义。
     """
     captured = _capture_echo(monkeypatch)
     exc = RAGError(code=ReaderErrorCode.NOT_FOUND, message="/path/to/missing.pdf")
@@ -47,19 +47,6 @@ def test_rag_error_renders_with_code(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "reader.not_found" in captured["msg"]
     assert "/path/to/missing.pdf" in captured["msg"]
     assert captured["err"] == "True"  # err=True → stderr
-
-
-def test_rag_error_api_auth_keeps_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``READER_API_AUTH`` 是 ApiSource 401/403 专属 code, 不能被吞。"""
-    captured = _capture_echo(monkeypatch)
-    exc = RAGError(
-        code=ReaderErrorCode.API_AUTH,
-        message="https://api.x/v1: api auth failed: HTTP 401",
-    )
-    _render_error(exc)
-
-    assert "reader.api_auth" in captured["msg"]
-    assert "401" in captured["msg"]
 
 
 def test_non_rag_error_falls_back_to_type_name(

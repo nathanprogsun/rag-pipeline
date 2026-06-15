@@ -98,7 +98,7 @@ def test_pipeline_docx_via_buffer_source(sample_docx: Path) -> None:
     )
 
     assert result.chunks
-    assert result.doc_meta.datasource == "api"
+    assert result.doc_meta.datasource == "file"
     assert result.doc_meta.filename == "doc.docx"
     # doc_meta.size_bytes 应等于 buffer 长度
     assert result.doc_meta.size_bytes == len(buffer)

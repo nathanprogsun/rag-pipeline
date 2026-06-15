@@ -1,15 +1,15 @@
-"""build_full_pipeline 集成测试 — 真实 PG + 真实 embedding + 真实 NDJSON audit。
+"""build_search_pipeline 集成测试 — 真实 PG + 真实 embedding + 真实 NDJSON audit。
 
 不 mock:
 - 真实 embedding: ``live_embed_model`` fixture (DashScope text-embedding-v4)
 - 真实 PG: 真实 dataset + 真实 chunk (embedding 由 live_embed_model 生成)
 - 真实 VectorRetriever / FulltextRetriever (调 live_embed_model.aembed_query + ChunkRepository)
-- 真实 PipelineOrchestrator (含 SimpleCite 触发 citation_count > 0)
+- 真实 SearchPipeline (含 SimpleCite 触发 citation_count > 0)
 - 真实 JSONL file write
 - LLM: mock (因为真实 LLM 调用昂贵且不在本任务范围; 通过 mock llm.ainvoke)
 
 场景:
-- 真实 build_full_pipeline → 真实 orchestrator + 真实 audit
+- 真实 build_search_pipeline → 真实 orchestrator + 真实 audit
 - 真实 ainvoke → SearchResult 含 _intermediate_hits / citations / response
 - 真实 audit round-trip: write → read_jsonl_records
 - 真实 embedding 链路: aembed_documents (seed) → aembed_query (query) → pgvector HNSW
@@ -28,11 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.config import settings
 from rag.domain.search import SearchRequest
+from rag.infra.observability.audit import AuditTap, read_jsonl_records
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
-from rag.pipeline.full import PipelineDeps, build_full_pipeline
-from rag.retrieval.audit import AuditTap, read_jsonl_records
+from rag.search.factory import SearchPipelineDeps, build_search_pipeline
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -65,9 +65,7 @@ async def _seed_chunks_with_real_embeddings(
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     chunks: list[ChunkModel] = []
     for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id, text=content, embedding=emb
-        )
+        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
@@ -75,8 +73,7 @@ async def _seed_chunks_with_real_embeddings(
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -126,8 +123,8 @@ async def test_real_build_full_pipeline_end_to_end(
         embed_model=live_embed_model,
     )
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
 
     req = SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
     result = await pipeline.ainvoke(req)
@@ -170,15 +167,13 @@ async def test_real_build_full_pipeline_with_audit(
     )
 
     audit_path = tmp_path / "audit.jsonl"
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=live_embed_model,
         llm=_fake_llm(),
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_full_pipeline(deps)
-    req = SearchRequest(
-        query="Python 数据分析", dataset_ids=[ds], audit=True
-    )
+    pipeline = build_search_pipeline(deps)
+    req = SearchRequest(query="Python 数据分析", dataset_ids=[ds], audit=True)
 
     await pipeline.ainvoke(req)
 
@@ -200,8 +195,8 @@ async def test_real_build_full_pipeline_failed_dataset(
     不需要 db_session (没有 seed 数据)。真实 embedding API 仍被调用
     (VectorRetriever.search → aembed_query), 但检索结果为空 (PG 无对应 dataset)。
     """
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
 
     fake_ds = uuid.uuid4()  # PG 中无对应 chunk
     req = SearchRequest(query="test", dataset_ids=[fake_ds])
@@ -236,12 +231,12 @@ async def test_real_build_full_pipeline_multiple_requests(
     )
 
     audit_path = tmp_path / "audit.jsonl"
-    deps = PipelineDeps(
+    deps = SearchPipelineDeps(
         embedder=live_embed_model,
         llm=_fake_llm(response_text="answer"),
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_full_pipeline(deps)
+    pipeline = build_search_pipeline(deps)
 
     queries = ["Python", "Python 教程", "Python 数据分析"]
     for q in queries:
@@ -276,8 +271,8 @@ async def test_real_build_full_pipeline_cosine_ranking(
         embed_model=live_embed_model,
     )
 
-    deps = PipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_full_pipeline(deps)
+    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
+    pipeline = build_search_pipeline(deps)
     req = SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
 
     result = await pipeline.ainvoke(req)

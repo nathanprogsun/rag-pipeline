@@ -1,4 +1,4 @@
-"""Unit tests for ``rag.pipeline.parent_doc`` (stage 8).
+"""Unit tests for ``rag.search.post.parent_doc`` (stage 8).
 
 Tests cover Contract 8 stage 8 invariants:
 - NoOpParentDoc identity passthrough
@@ -21,7 +21,7 @@ from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import SearchRequest
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.parent_doc import (
+from rag.search.post.parent_doc import (
     NoOpParentDoc,
     ParentDocExpander,
 )
@@ -101,7 +101,8 @@ def _req(*, parent_doc_window: int = 0) -> SearchRequest:
 
 
 def _make_chunk_repo(
-    *, siblings_by_doc: dict | None = None,
+    *,
+    siblings_by_doc: dict | None = None,
     side_effect: BaseException | None = None,
 ) -> MagicMock:
     """Mock ChunkRepository. ``siblings_by_doc`` maps chunk_id_str -> list of DomainChunk."""
@@ -110,9 +111,7 @@ def _make_chunk_repo(
         repo.get_siblings = AsyncMock(side_effect=side_effect)
     else:
         siblings_by_doc = siblings_by_doc or {}
-        chunks_by_id = {
-            uuid.UUID(k): v for k, v in (siblings_by_doc or {}).items()
-        }
+        chunks_by_id = {uuid.UUID(k): v for k, v in (siblings_by_doc or {}).items()}
 
         async def _get_siblings(
             dataset_id: uuid.UUID,
@@ -126,7 +125,7 @@ def _make_chunk_repo(
             return []
 
         repo.get_siblings = AsyncMock(side_effect=_get_siblings)
-        repo._chunks_by_id = chunks_by_id  # type: ignore[attr-defined]
+        repo._chunks_by_id = chunks_by_id
     return repo
 
 
@@ -250,8 +249,8 @@ async def test_expander_matched_chunk_keeps_original_score() -> None:
     matched_id = matched.id
 
     async def _get_siblings(
-            dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
-        ) -> list[DomainChunk]:
+        dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
+    ) -> list[DomainChunk]:
         return [matched]
 
     repo.get_siblings = AsyncMock(side_effect=_get_siblings)
@@ -273,14 +272,12 @@ async def test_expander_siblings_get_decay_score() -> None:
     repo = MagicMock(spec=ChunkRepository)
 
     async def _get_siblings(
-            dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
-        ) -> list[DomainChunk]:
+        dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
+    ) -> list[DomainChunk]:
         return [matched, sibling_b, sibling_c]
 
     repo.get_siblings = AsyncMock(side_effect=_get_siblings)
-    expander = ParentDocExpander(
-        chunk_repo=repo, default_window=2, sibling_decay=0.5
-    )
+    expander = ParentDocExpander(chunk_repo=repo, default_window=2, sibling_decay=0.5)
     docs = [_doc(A, chunk_index=5, score=0.8, parent_title="t")]
 
     result = await expander(docs, _req(parent_doc_window=0))
@@ -300,14 +297,12 @@ async def test_expander_decay_zero_zeros_sibling_score() -> None:
     repo = MagicMock(spec=ChunkRepository)
 
     async def _get_siblings(
-            dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
-        ) -> list[DomainChunk]:
+        dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
+    ) -> list[DomainChunk]:
         return [matched, sibling]
 
     repo.get_siblings = AsyncMock(side_effect=_get_siblings)
-    expander = ParentDocExpander(
-        chunk_repo=repo, default_window=2, sibling_decay=0.0
-    )
+    expander = ParentDocExpander(chunk_repo=repo, default_window=2, sibling_decay=0.0)
     docs = [_doc(A, chunk_index=5, score=0.8, parent_title="t")]
 
     result = await expander(docs, _req(parent_doc_window=0))
@@ -324,9 +319,7 @@ async def test_expander_image_caption_bypasses_expansion() -> None:
     """image_caption modality 不进 get_siblings, 原样保留。"""
     repo = _make_chunk_repo()
     expander = ParentDocExpander(chunk_repo=repo, default_window=3)
-    img = _doc(
-        A, chunk_index=5, parent_title="t", modality="image_caption"
-    )
+    img = _doc(A, chunk_index=5, parent_title="t", modality="image_caption")
     docs = [img]
     result = await expander(docs, _req(parent_doc_window=0))
 
@@ -365,8 +358,8 @@ async def test_expander_overlapping_windows_dedup() -> None:
 
     # D 也会命中 C 这个 chunk (D 的 sibling 包含 C)
     async def _get_siblings(
-            dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
-        ) -> list[DomainChunk]:
+        dataset_id: uuid.UUID, parent_title: str, lo: int, hi: int
+    ) -> list[DomainChunk]:
         # 简化: 总是返回所有 siblings (测试不关心 window 过滤)
         return [matched_a, sibling_b, sibling_c, matched_d]
 
@@ -406,12 +399,11 @@ async def test_expander_calls_on_error_on_failure() -> None:
     repo = MagicMock(spec=ChunkRepository)
     repo.get_siblings = AsyncMock(side_effect=RuntimeError("oops"))
     on_error = AsyncMock()
-    expander = ParentDocExpander(
-        chunk_repo=repo, default_window=3, on_error=on_error
-    )
+    expander = ParentDocExpander(chunk_repo=repo, default_window=3, on_error=on_error)
     docs = [_doc(A)]
     await expander(docs, _req(parent_doc_window=0))
     on_error.assert_awaited_once()
+    assert on_error.await_args is not None
     args = on_error.await_args.args
     assert args[0] == docs
     assert isinstance(args[1], RuntimeError)

@@ -27,15 +27,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from rag.config import settings
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import Citation, SearchRequest
+from rag.infra.observability.audit import AuditRecord, AuditTap, read_jsonl_records
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.pipeline.cite import SimpleCite
-from rag.pipeline.orchestrator import PipelineOrchestrator
-from rag.pipeline.subgraph import SearchSubgraph
-from rag.retrieval.audit import AuditRecord, AuditTap, read_jsonl_records
-from rag.retrieval.citation_check import CitationChecker
+from rag.infra.text.citation_check import CitationChecker
+from rag.search.orchestrator import SearchPipeline
+from rag.search.post.cite import SimpleCite
+from rag.search.retrieve.subgraph import SearchSubgraph
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -45,9 +45,7 @@ EMBED_DIM: int = settings.openai_embedding_dim
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str
-) -> uuid.UUID:
+async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
     ds = DatasetModel(
         id=uuid.uuid4(),
         name=name,
@@ -69,17 +67,14 @@ async def _seed_chunks(
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     chunks: list[ChunkModel] = []
     for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id, text=content, embedding=emb
-        )
+        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
     for chunk in chunks:
         await db_session.execute(
             text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) "
-                "WHERE id = :id"
+                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
             ),
             {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
         )
@@ -118,9 +113,7 @@ class _RepoRetriever:
             if self.mode == "vector":
                 assert self.embed_model is not None
                 query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(
-                    query_emb, self.dataset_id, top_k
-                )
+                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
             elif self.mode == "fulltext":
                 rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
             else:
@@ -168,13 +161,13 @@ def _make_subgraph(
 ) -> SearchSubgraph:
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(
+        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=_RepoRetriever(
+        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",
@@ -216,9 +209,7 @@ async def test_real_audit_records_orchestrator_run(
             top_k=5,
         )
     }
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, cite=SimpleCite()
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite())
 
     # 跑 orchestrator + 写 audit
     audit_path = tmp_path / "audit.jsonl"
@@ -265,7 +256,7 @@ async def test_real_audit_multiple_requests_ndjson(
             embed_model=live_embed_model,
         )
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs, cite=SimpleCite())
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite())
 
     audit_path = tmp_path / "audit.jsonl"
     tap = AuditTap(audit_path, sample_rate=1.0, sync=True)
@@ -314,7 +305,7 @@ async def test_real_audit_parent_doc_window_captured(
             embed_model=live_embed_model,
         )
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
 
     audit_path = tmp_path / "audit.jsonl"
     tap = AuditTap(audit_path, sample_rate=1.0, sync=True)
@@ -354,7 +345,7 @@ async def test_real_audit_failed_dataset_tracked(
             embed_model=live_embed_model,
         )
     }
-    orch = PipelineOrchestrator(subgraphs=subgraphs)
+    orch = SearchPipeline(subgraphs=subgraphs)
     missing = uuid.uuid4()  # NOT registered
 
     audit_path = tmp_path / "audit.jsonl"
@@ -412,9 +403,7 @@ async def test_real_citation_check_end_to_end(
             return "no content"
         return "see [1](CITE) and [2](CITE) for more"
 
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, cite=SimpleCite(), gen=marker_gen
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite(), gen=marker_gen)
     result = await orch.ainvoke(
         SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
     )
@@ -457,12 +446,8 @@ async def test_real_citation_check_invalid_marker(
     ) -> str:
         return "this cites [99](CITE) which is out of range"
 
-    orch = PipelineOrchestrator(
-        subgraphs=subgraphs, cite=SimpleCite(), gen=bad_gen
-    )
-    result = await orch.ainvoke(
-        SearchRequest(query="Python", dataset_ids=[ds])
-    )
+    orch = SearchPipeline(subgraphs=subgraphs, cite=SimpleCite(), gen=bad_gen)
+    result = await orch.ainvoke(SearchRequest(query="Python", dataset_ids=[ds]))
 
     checker = CitationChecker()
     check_result = checker.check(result.response, result.citations)

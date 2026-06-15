@@ -12,7 +12,7 @@ from pydantic import SecretStr
 from rag.config import settings
 from rag.infra.llm.chat import get_structured_chat_model
 from rag.infra.llm.embed import get_embed_model
-from rag.pipeline.query_ext import (
+from rag.search.extension.query_ext import (
     QueryExtensionRunnable,
     QueryExtensionVariants,
 )
@@ -166,7 +166,7 @@ class TestQueryExtensionEndToEndLive:
 
         # deduped_variants is deduplicated (string normalize + original at index 0)
         # No two consecutive entries should normalize to the same value
-        from rag.pipeline.query_ext import _normalize_for_dedup
+        from rag.search.extension.query_ext import _normalize_for_dedup
 
         seen: set[str] = set()
         for v in result.deduped_variants:

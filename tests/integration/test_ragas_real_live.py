@@ -14,9 +14,6 @@ CI integration:
 
 from __future__ import annotations
 
-import uuid
-
-import pytest
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable
 
@@ -32,7 +29,7 @@ async def test_real_ragas_end_to_end(
     Skips if any of OPENAI_API_KEY / OPENAI_EMBEDDING_API_KEY missing.
     """
     runner = RagasRealRunner(
-        llm=real_llm_chat_model,
+        llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
     result = await runner.compute(
@@ -65,12 +62,10 @@ async def test_real_ragas_faithfulness_high(
     Skips if API key missing.
     """
     runner = RagasRealRunner(
-        llm=real_llm_chat_model,
+        llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
-    context_text = (
-        "Python was created by Guido van Rossum and first released in 1991."
-    )
+    context_text = "Python was created by Guido van Rossum and first released in 1991."
     result = await runner.compute(
         user_input="When was Python first released?",
         # Response claims only what context supports.
@@ -96,7 +91,7 @@ async def test_real_ragas_failure_isolated(
     should still return a value (using the response embedding).
     """
     runner = RagasRealRunner(
-        llm=real_llm_chat_model,
+        llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
     result = await runner.compute(
