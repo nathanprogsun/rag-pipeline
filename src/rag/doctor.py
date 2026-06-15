@@ -233,6 +233,7 @@ async def check_redis(report: DoctorReport) -> None:
 
     url = str(settings.redis_url)
     parsed = urllib.parse.urlparse(url)
+    has_password = bool(parsed.password)
 
     client = redis_async.from_url(url, socket_connect_timeout=2)
     try:
@@ -246,12 +247,24 @@ async def check_redis(report: DoctorReport) -> None:
         else:
             report.add("redis", "fail", "PING 返 falsy", "")
     except Exception as e:
-        report.add(
-            "redis",
-            "fail",
-            f"{type(e).__name__}: {e!r}",
-            "确认 docker compose 已启动, 端口 6379 可达",
-        )
+        err_name = type(e).__name__
+        # 区分常见原因给针对性 hint
+        if err_name == "AuthenticationError" or "NOAUTH" in str(e) or "auth" in str(e).lower():
+            hint = (
+                "REDIS_URL 缺少密码 (或密码错)。两种修法:\n"
+                "      1) `make up` 启本项目自带的 redis (无鉴权)\n"
+                "      2) REDIS_URL 改为 `redis://:<password>@host:port/db` 形式"
+            )
+            if not has_password:
+                hint = (
+                    "REDIS_URL 无密码, 但目标 redis 启用了鉴权 (NOAUTH/AUTH required)。\n"
+                    "      修法: REDIS_URL 改为 `redis://:<password>@host:port/db` 或运行 `make up` 启本项目自带的 redis"
+                )
+        elif "ConnectionError" in err_name or "refused" in str(e).lower():
+            hint = "确认 docker compose 已启动, 端口 6379 可达 (`make up`)"
+        else:
+            hint = f"未知错误, 详见: {type(e).__name__}: {e!r}"
+        report.add("redis", "fail", f"{err_name}: {e!r}", hint)
     finally:
         await client.aclose()
 
@@ -283,9 +296,14 @@ async def main() -> int:
     # 已安装但用不到的包检测 (开发可选)
     try:
         ragas_ver = importlib_metadata.version("ragas")
-        report.add("ragas (optional)", "pass", f"v{ragas_ver} (eval 需要)")
+        report.add("ragas (optional)", "pass", f"v{ragas_ver} (eval 真实指标需要)")
     except importlib_metadata.PackageNotFoundError:
-        report.add("ragas (optional)", "warn", "未安装", "仅 ragas 真实指标需要; 可选 `uv sync --extra eval` (若配置)")
+        report.add(
+            "ragas (optional)",
+            "warn",
+            "未安装",
+            "跑 RagasRealRunner 时需要; 安装: `uv sync --extra dev` (ragas 在 dev 依赖里)",
+        )
 
     report.print()
     return 1 if report.has_fail else 0
