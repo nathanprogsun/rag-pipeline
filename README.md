@@ -90,7 +90,148 @@ uv run rag-eval -d data/eval.jsonl
 
 ---
 
-## 三、开发
+## 三、CLI 使用
+
+三个入口命令由 `pyproject.toml` 注册, 通过 `uv run <command>` 触发。本节列举全部选项与常用示例; 完整定义见 `src/rag/<pkg>/cli.py` (typer)。
+
+### 1. `rag-ingest` — 文档接入
+
+```bash
+rag-ingest [OPTIONS] PATH [PATH ...]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `PATH` | 必填, 一个或多个本地文件/目录; 或 `--mode url` 时为单个 URL |
+| `--mode {file,url}` | 解析模式, 默认 `file` |
+| `-r, --recursive` | `file` 模式下递归展开目录 |
+| `--format-text/--no-format-text` | csv/xlsx 输出格式; 默认 markdown table, `--no-format-text` 用 raw_text |
+| `--chunk-stats` | 输出 chunk 质量统计(条数 / 平均大小 / 短 chunk 数等) |
+| `--normalize {off,auto,force}` | LLM 段落重整; `auto` / `force` 需 `OPENAI_API_KEY` |
+
+**示例**:
+
+```bash
+# 单文件
+uv run rag-ingest tests/data/sample.txt
+
+# 多文件 + 目录递归
+uv run rag-ingest docs/whitepaper.pdf docs/spec.docx --recursive
+
+# URL 抓取
+uv run rag-ingest --mode url https://example.com/article.html
+
+# 输出 chunk 质量统计
+uv run rag-ingest tests/data/sample.md --chunk-stats
+
+# LLM 段落重整(已结构化的 markdown 文档自动跳过)
+uv run rag-ingest raw_notes.txt --normalize auto
+```
+
+### 2. `rag-search` — 检索 + 生成
+
+```bash
+rag-search [OPTIONS]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `-q, --query` | 必填, 搜索 query |
+| `--dataset-id` | 必填, 目标 dataset UUID, 可多次指定实现多 dataset 并发 |
+| `-k, --top-k` | 每 dataset 召回 top-k, 默认 10 |
+| `--output {text,json}` | 输出格式, 默认 `text` |
+| `--audit` | 启用 NDJSON 审计写入 |
+| `--audit-path` | 自定义 audit 文件路径(默认走 `settings.cache_audit_path`) |
+| `--rerank-weight` | rerank 与原 RRF 融合权重, 范围 `[0, 1]`, 默认 0.7 |
+
+**示例**:
+
+```bash
+# 单 dataset
+uv run rag-search -q "Python 列表推导式" --dataset-id 11111111-1111-1111-1111-111111111111
+
+# 多 dataset + JSON 输出
+uv run rag-search -q "Java 静态类型" \
+  --dataset-id <UUID1> --dataset-id <UUID2> \
+  --output json
+
+# 写 audit NDJSON(离线分析用)
+uv run rag-search -q "test" \
+  --dataset-id <UUID> \
+  --audit --audit-path ./audit.jsonl
+
+# 提高 rerank 信任度(接近 1.0 = 几乎只看 rerank)
+uv run rag-search -q "向量检索" --dataset-id <UUID> --rerank-weight 0.9
+```
+
+**Text 输出样例**:
+
+```
+============================================================
+Query: Python 列表推导式
+============================================================
+Response:
+列表推导式是 Python 的语法糖, 用于从可迭代对象构造列表, 例: [x*x for x in range(10)] ...
+============================================================
+Citations (3):
+  [1] src-1 (chunk_id=aaa..., score=0.872)
+      列表推导式提供简洁的列表构造方式, ...
+  [2] src-2 (chunk_id=bbb..., score=0.731)
+      Python 3 引入了 dict comprehension 与 set comprehension, ...
+  [3] src-3 (chunk_id=ccc..., score=0.654)
+      与 generator expression 对比, 列表推导式会立即求值, ...
+============================================================
+Intermediate hits: 7
+```
+
+### 3. `rag-eval` — 评估流水线
+
+```bash
+rag-eval [OPTIONS]
+```
+
+| 选项 | 说明 |
+|---|---|
+| `-d, --dataset` | 必填, Eval JSONL 数据集路径 |
+| `--output {text,json}` | 输出格式, 默认 `text` |
+| `--output-path` | 把 summary 写到 JSON 文件(与 `--output` 独立) |
+| `-k, --k` | 默认 k(per-record JSONL 不指定时用), 默认 10 |
+| `--concurrency` | 并发 pipeline 调用数, 默认 4 |
+
+**JSONL 数据格式** (`data/eval.jsonl`, 每行一条):
+
+```json
+{"query":"Python 列表推导式","dataset_ids":["11111111-1111-1111-1111-111111111111"],"ground_truth_chunk_ids":["aaa...","bbb..."],"k":10}
+{"query":"Java 静态类型","dataset_ids":["22222222-2222-2222-2222-222222222222"],"ground_truth_chunk_ids":["ccc..."],"k":5}
+```
+
+字段说明:
+
+- `query`: 测试 query(必填)
+- `dataset_ids`: 目标 dataset UUID 列表(必填)
+- `ground_truth_chunk_ids`: 相关 chunk_id 列表, 用于计算 recall / precision(必填)
+- `k`: 召回 top-k(可选, 不指定走 `--k` 默认)
+
+**示例**:
+
+```bash
+# 文本输出到 stdout
+uv run rag-eval -d data/eval.jsonl
+
+# JSON 输出 + 落盘 summary
+uv run rag-eval -d data/eval.jsonl \
+  --output json \
+  --output-path summary.json
+
+# 提高并发 + 调小 k
+uv run rag-eval -d data/eval.jsonl --concurrency 8 --k 5
+```
+
+输出指标: `recall@k` / `precision@k` / `hit_rate@k` / `mrr` / `ndcg@k`, 聚合 `mean` / `std` / `min` / `max` / `median` / `count`。
+
+---
+
+## 四、开发
 
 ### 1. 工具链
 
@@ -137,7 +278,7 @@ uv run pre-commit run --all-files
 
 ---
 
-## 四、项目架构
+## 五、项目架构
 
 ### 1. 目录结构
 
@@ -308,7 +449,7 @@ docker compose --profile cli run --rm rag rag-eval -d /data/eval.jsonl
 
 ---
 
-## 五、核心配置
+## 六、核心配置
 
 ### 1. `ChunkSettings`
 
