@@ -34,8 +34,8 @@ dependencies = [
 
 [project.scripts]
 rag-ingest = "rag.ingest.cli:main"
-rag-search = "rag.search.cli:main"
-rag-eval = "rag.eval.cli:main"
+rag-search = "rag.search.cli:app"
+rag-eval = "rag.eval.cli:app"
 
 [build-system]
 requires = ["hatchling"]
