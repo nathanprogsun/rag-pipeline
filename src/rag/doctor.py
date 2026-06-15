@@ -174,7 +174,7 @@ async def _check_pg(report: DoctorReport) -> None:
                     "pg connectivity",
                     "fail",
                     f"SELECT 1 失败: {type(e).__name__}: {e!r}",
-                    "确认 docker compose 已启动, 端口 5432 可达",
+                    "排查: `docker compose ps` 确认容器在跑, 否则 `make up` 启本项目自带 pg",
                 )
                 await engine.dispose()
                 return
@@ -261,7 +261,9 @@ async def check_redis(report: DoctorReport) -> None:
                     "      修法: REDIS_URL 改为 `redis://:<password>@host:port/db` 或运行 `make up` 启本项目自带的 redis"
                 )
         elif "ConnectionError" in err_name or "refused" in str(e).lower():
-            hint = "确认 docker compose 已启动, 端口 6379 可达 (`make up`)"
+            hint = (
+                "排查: `docker compose ps` 确认容器在跑, 否则 `make up` 启本项目自带 redis"
+            )
         else:
             hint = f"未知错误, 详见: {type(e).__name__}: {e!r}"
         report.add("redis", "fail", f"{err_name}: {e!r}", hint)
