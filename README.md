@@ -9,7 +9,7 @@
 
 | 模块 | CLI 入口 | 核心能力 |
 |---|---|---|
-| 文档接入 | `rag-ingest` | 9 种格式解析(txt / md / html / htm / pdf / docx / pptx / csv / xlsx)+ URL 抓取 + Buffer / API 接入;`--normalize {off,auto,force}` 可选 LLM 段落改写;`--chunk-stats` 输出切块质量指标 |
+| 文档接入 | `rag-ingest` | 9 种格式解析(txt / md / html / htm / pdf / docx / pptx / csv / xlsx)+ URL 抓取 + Buffer / API 接入;`--normalize auto\|off\|force` (默认 `auto`, 已结构化内容自动跳过);`--dataset-id` / `--create-dataset` 落库到 PG (含 batch embed);`--chunk-stats` 输出切块质量指标 |
 | 检索 / 生成 | `rag-search` | 多 dataset 并行检索(向量 + 全文双路 → RRF 融合 → rerank → filter);token 预算 + 引用去重;LLM 生成带 `[id](CITE)` 行内引用;支持 audit NDJSON |
 | 评估 | `rag-eval` | JSONL 数据集跑 EvalRunner;产出 `recall@k` / `precision@k` / `hit_rate@k` / `mrr` / `ndcg@k` 聚合指标(mean / std / min / max / median / count);可选 RAGAS 真实指标 |
 | 缓存 | `infra/cache` | 4 级 cache key(embedding / query_ext / search / rerank);基于 dataset_version 的失效 pattern;Redis 不可用时降级 |
@@ -107,12 +107,16 @@ rag-ingest [OPTIONS] PATH [PATH ...]
 | `-r, --recursive` | `file` 模式下递归展开目录 |
 | `--format-text/--no-format-text` | csv/xlsx 输出格式; 默认 markdown table, `--no-format-text` 用 raw_text |
 | `--chunk-stats` | 输出 chunk 质量统计(条数 / 平均大小 / 短 chunk 数等) |
-| `--normalize {off,auto,force}` | LLM 段落重整; `auto` / `force` 需 `OPENAI_API_KEY` |
+| `--normalize {auto,off,force}` | LLM 段落重整; 默认 `auto` (已结构化内容自动跳过), `auto`/`force` 需 `OPENAI_API_KEY` |
+| `--dataset-id UUID` | 落库目标 dataset; 与 `--create-dataset` 二选一, 不传则不落库 |
+| `--create-dataset` | 配合 `--dataset-name` 新建 dataset, 需 `OPENAI_EMBEDDING_API_KEY` |
+| `--dataset-name STR` | 新建 dataset 的展示名(与 `--create-dataset` 配对) |
+| `--no-persist` | 只解析切块, 不写 PG (调试用) |
 
 **示例**:
 
 ```bash
-# 单文件
+# 单文件(只解析, 不落库)
 uv run rag-ingest tests/data/sample.txt
 
 # 多文件 + 目录递归
@@ -126,6 +130,26 @@ uv run rag-ingest tests/data/sample.md --chunk-stats
 
 # LLM 段落重整(已结构化的 markdown 文档自动跳过)
 uv run rag-ingest raw_notes.txt --normalize auto
+
+# 解析 + 落库到已有 dataset(同 (dataset, filename) 幂等: 先软删旧 chunk 再 insert)
+uv run rag-ingest report.pdf --dataset-id 11111111-1111-1111-1111-111111111111
+
+# 解析 + 新建 dataset + 落库
+uv run rag-ingest report.pdf --create-dataset --dataset-name "python-tutorial"
+
+# 调试: 只解析不落库
+uv run rag-ingest report.pdf --no-persist
+```
+
+**落库输出样例**:
+
+```
+title: Sample Markdown Document
+source: file:///path/to/sample.md
+chunks: 1
+---
+[0/1] ...: # Sample Markdown Document | # Sample Markdown Document ...
+persisted: dataset_id=26876b0e-... name='python-tutorial' old_chunks=0 new_chunks=1
 ```
 
 ### 2. `rag-search` — 检索 + 生成

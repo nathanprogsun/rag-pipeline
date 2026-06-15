@@ -1,9 +1,10 @@
-"""``rag-ingest`` Typer CLI：本地文件 / URL → IngestPipeline → stdout。"""
+"""``rag-ingest`` Typer CLI: 本地文件 / URL → IngestPipeline → (可选) PG → stdout。"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from typing import Annotated, Final, Literal, cast
 
@@ -13,11 +14,14 @@ from rag.config import settings
 from rag.error_codes import ConfigErrorCode
 from rag.exception import RAGError
 from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.embed import get_embed_model
+from rag.infra.pg.database import AsyncSessionLocal
 from rag.ingest.chunker import Chunker
 from rag.ingest.chunker.quality import format_chunk_stats, measure_chunks
 from rag.ingest.chunker.settings import ChunkSettings
 from rag.ingest.normalizer import StructureMode, StructureNormalizer
 from rag.ingest.normalizer.structure import StructuredText
+from rag.ingest.persist import persist as persist_chunks
 from rag.ingest.pipeline import IngestPipeline
 from rag.ingest.source import FileSource, IngestSource, UrlSource
 from rag.ingest.types import ChunkMetadata, IngestResult
@@ -39,18 +43,22 @@ _FORMAT_TEXT_HELP: Final[str] = (
 )
 _CHUNK_STATS_HELP: Final[str] = "输出 chunk 质量统计。"
 _NORMALIZE_HELP: Final[str] = (
-    "LLM 段落重整: off (默认) | auto | force；auto/force 需 OPENAI_API_KEY。"
+    "LLM 段落重整: auto (默认, 已结构化内容自动跳过) | off | force；auto/force 需 OPENAI_API_KEY。"
 )
 
 _CLI_HELP: Final[str] = """\
-读取本地文件或 URL，解析、切块并打印到 stdout。
+读取本地文件或 URL，解析、切块、(可选) 写入 PG 并打印到 stdout。
 
 \b
 Options:
   --mode [file|url]                  file=本地路径 (默认); url=HTTP(S) URL
   --format-text | --no-format-text
   --chunk-stats
-  --normalize [off|auto|force]
+  --normalize [off|auto|force]        默认 auto (已结构化内容自动跳过)
+  --dataset-id UUID                  落库目标 dataset; 必传 (或 --create-dataset)
+  --create-dataset                   配合 --dataset-name 新建 dataset
+  --dataset-name STR                 新建 dataset 的展示名
+  --no-persist                       只解析不落库 (调试用)
   -r, --recursive                    仅 file 模式；>100MB 文件跳过
 
 \b
@@ -58,6 +66,8 @@ Examples:
   rag-ingest report.pdf
   rag-ingest -r ./docs/ --chunk-stats
   rag-ingest --mode url https://example.com/page.html
+  rag-ingest report.pdf --dataset-id <UUID>
+  rag-ingest report.pdf --create-dataset --dataset-name "python-tutorial"
 """
 
 app = typer.Typer(name="rag-ingest", add_completion=False)
@@ -88,6 +98,18 @@ def _ensure_normalize_api_key(mode: NormalizeMode) -> None:
     typer.echo(
         f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
         "OPENAI_API_KEY required for --normalize auto|force",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _ensure_embed_api_key() -> None:
+    """PersistStage 需 OPENAI_EMBEDDING_API_KEY; 缺则报错。"""
+    if settings.openai_embedding_api_key.get_secret_value().strip():
+        return
+    typer.echo(
+        f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
+        "OPENAI_EMBEDDING_API_KEY required for persist (--dataset-id / --create-dataset)",
         err=True,
     )
     raise typer.Exit(code=1)
@@ -156,9 +178,15 @@ def _run_ingest(
     get_format_text: bool = True,
     normalize: NormalizeMode = "off",
     chunk_stats: bool = False,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
 ) -> None:
     _configure_cli_logging(normalize)
     _ensure_normalize_api_key(normalize)
+    if persist:
+        _ensure_embed_api_key()
     pipeline = _build_pipeline(normalize=normalize)
     try:
         result = asyncio.run(pipeline.ingest(source, get_format_text=get_format_text))
@@ -166,6 +194,45 @@ def _run_ingest(
         _render_error(exc)
         raise typer.Exit(code=1) from exc
     _render_result(result, chunk_stats=chunk_stats)
+    if persist:
+        _persist_one(result, dataset_id, create_dataset, dataset_name)
+
+
+def _persist_one(
+    result: IngestResult,
+    dataset_id: uuid.UUID | None,
+    create_dataset: bool,
+    dataset_name: str | None,
+) -> None:
+    """单条 IngestResult 持久化。失败不抛 (打印 warning 继续), 避免单文件失败拖垮整批。"""
+    import logging as _logging
+
+    from rag.ingest.persist import persist as _persist
+
+    async def _run() -> object:
+        async with AsyncSessionLocal() as session:
+            return await _persist(
+                session,
+                result,
+                dataset_id=dataset_id,
+                create_dataset=create_dataset,
+                dataset_name=dataset_name,
+                embedder=get_embed_model(),
+            )
+
+    try:
+        pr = asyncio.run(_run())
+        typer.echo(
+            f"persisted: dataset_id={pr.dataset_id} name={pr.dataset_name!r} "
+            f"old_chunks={pr.old_chunk_count} new_chunks={pr.new_chunk_count}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(
+            f"{_YELLOW}persist warning (continuing): "
+            f"[{type(exc).__name__}] {exc}{_RESET}",
+            err=True,
+        )
+        _logging.getLogger(__name__).warning("persist failed: %r", exc)
 
 
 async def _run_batch_async(
@@ -189,9 +256,15 @@ def _run_batch(
     normalize: NormalizeMode,
     format_text: bool,
     chunk_stats: bool,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
 ) -> None:
     _configure_cli_logging(normalize)
     _ensure_normalize_api_key(normalize)
+    if persist:
+        _ensure_embed_api_key()
     try:
         results = asyncio.run(
             _run_batch_async(
@@ -217,6 +290,8 @@ def _run_batch(
             )
         else:
             _render_result(result, chunk_stats=chunk_stats)
+            if persist:
+                _persist_one(result, dataset_id, create_dataset, dataset_name)
         if idx < total:
             typer.echo(_SEPARATOR)
 
@@ -304,10 +379,52 @@ def ingest_cmd(
     normalize: Annotated[
         NormalizeMode,
         typer.Option("--normalize", help=_NORMALIZE_HELP, case_sensitive=False),
-    ] = "off",
+    ] = "auto",
+    dataset_id: Annotated[
+        uuid.UUID | None,
+        typer.Option(
+            "--dataset-id",
+            help="落库目标 dataset UUID; 与 --create-dataset 二选一。",
+        ),
+    ] = None,
+    create_dataset: Annotated[
+        bool,
+        typer.Option(
+            "--create-dataset/--no-create-dataset",
+            help="配合 --dataset-name 新建 dataset (需 OPENAI_EMBEDDING_API_KEY)",
+        ),
+    ] = False,
+    dataset_name: Annotated[
+        str | None,
+        typer.Option(
+            "--dataset-name",
+            help="新建 dataset 的展示名 (与 --create-dataset 配对使用)",
+        ),
+    ] = None,
+    no_persist: Annotated[
+        bool,
+        typer.Option(
+            "--no-persist",
+            help="只解析切块, 不写 PG (调试用)",
+        ),
+    ] = False,
 ) -> None:
     ingest_mode = cast(IngestMode, mode.lower())
     normalize_mode = cast(NormalizeMode, normalize.lower())
+    persist = (dataset_id is not None or create_dataset) and not no_persist
+
+    if create_dataset and dataset_name is None:
+        typer.echo(
+            f"ingest failed: --create-dataset 必须配 --dataset-name",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if create_dataset and dataset_id is not None:
+        typer.echo(
+            f"ingest failed: --create-dataset 与 --dataset-id 互斥",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     if ingest_mode == "url":
         if len(targets) != 1:
@@ -318,6 +435,10 @@ def ingest_cmd(
             get_format_text=format_text,
             normalize=normalize_mode,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
         return
 
@@ -340,6 +461,10 @@ def ingest_cmd(
             normalize=normalize_mode,
             format_text=format_text,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
     else:
         _run_ingest(
@@ -347,6 +472,10 @@ def ingest_cmd(
             get_format_text=format_text,
             normalize=normalize_mode,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
 
 

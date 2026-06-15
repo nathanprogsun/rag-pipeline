@@ -44,6 +44,15 @@ class RetrievalErrorCode(StrEnum):
     NO_RESULTS = "retrieval.no_results"
 
 
+class IngestErrorCode(StrEnum):
+    """Ingest 阶段错误码 (持久化层)。"""
+
+    PERSIST_INVALID_ARGS = "ingest.persist.invalid_args"
+    PERSIST_DATASET_NOT_FOUND = "ingest.persist.dataset_not_found"
+    PERSIST_EMBED_FAILED = "ingest.persist.embed_failed"
+    PERSIST_INSERT_FAILED = "ingest.persist.insert_failed"
+
+
 # 兼容旧注解 `code: ErrorCode`; 新代码优先引用具体 `*ErrorCode`。
 ErrorCode = (
     ReaderErrorCode
@@ -51,4 +60,5 @@ ErrorCode = (
     | NormalizerErrorCode
     | ConfigErrorCode
     | RetrievalErrorCode
+    | IngestErrorCode
 )

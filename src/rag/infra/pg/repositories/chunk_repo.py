@@ -106,6 +106,27 @@ class ChunkRepository:
             .values(deleted_at=func.now())
         )
 
+    async def soft_delete_by_filename(
+        self, dataset_id: uuid.UUID, filename: str
+    ) -> int:
+        """按文件名软删除, 返回受影响行数。
+
+        与 `delete_by_filename` 行为一致, 区别是显式返回受影响行数, 供
+        PersistStage 决定是否需要新插入。
+        """
+        result = await self.session.execute(
+            update(ChunkModel)
+            .where(
+                and_(
+                    ChunkModel.dataset_id == dataset_id,
+                    ChunkModel.filename == filename,
+                    ChunkModel.deleted_at.is_(None),
+                )
+            )
+            .values(deleted_at=func.now())
+        )
+        return int(result.rowcount or 0)
+
     async def bulk_insert(self, chunks: list[DomainChunk]) -> None:
         """批量写入 `DomainChunk` 列表。
 
