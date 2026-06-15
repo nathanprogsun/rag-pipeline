@@ -49,6 +49,11 @@ def _build_rerank_or_none() -> object:
 
 app = typer.Typer(name="rag-search", add_completion=False)
 
+# 挂载 list-datasets 子命令 (数据集发现)
+from rag.search.cli_datasets import datasets_app  # noqa: E402
+
+app.add_typer(datasets_app, name="list-datasets")
+
 
 def _err_exit(msg: str, code: int = 1) -> typer.Exit:
     typer.echo(f"{_YELLOW}{msg}{_RESET}", err=True)

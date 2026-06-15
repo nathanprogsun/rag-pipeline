@@ -184,6 +184,76 @@ Citations (3):
 Intermediate hits: 7
 ```
 
+#### 2.1 子命令 `rag-search list-datasets` — 数据集发现
+
+`rag-search` 必须传 `--dataset-id <UUID>`, 但 UUID 难以记忆。子命令 `list-datasets` 直接查 PG, 列出当前可搜索的 dataset。
+
+```bash
+rag-search list-datasets list [OPTIONS]
+```
+
+> 注意有两层: `rag-search` 是 typer app, `list-datasets` 是其下的子 typer app, `list` 是该子 app 唯一的命令。
+
+| 选项 | 说明 |
+|---|---|
+| `--output {text,json}` | 输出格式, 默认 `text` (对齐表格) |
+| `--limit` | 最多返回条数, 默认 100, 上限 10000 |
+| `--offset` | 分页偏移, 默认 0 |
+| `--name-contains` | 按 name 模糊过滤 (`LIKE '%...%'`) |
+| `--include-deleted/--no-include-deleted` | 是否包含软删除 dataset, 默认排除 |
+
+**示例**:
+
+```bash
+# 默认 text 输出
+uv run rag-search list-datasets list
+
+# JSON 格式 (含 total / limit / offset 元信息)
+uv run rag-search list-datasets list --output json
+
+# 模糊过滤 + 限制条数
+uv run rag-search list-datasets list --name-contains "python" --limit 5
+
+# 包含已软删除的 dataset (运维场景)
+uv run rag-search list-datasets list --include-deleted
+```
+
+**text 输出样例**:
+
+```
+DATASET ID                            NAME                EMBED MODEL        CHUNKS  CREATED
+----------------------------------------------------------------------------------------------------
+a013f0a7-e660-4751-8ee7-15d3915220fb  full-pipeline-rank  text-embedding-v4  4       2026-06-15
+08f8cea3-7276-4118-b8b9-8459c8a72189  full-pipeline-multi text-embedding-v4  1       2026-06-15
+5755f6a3-1bf3-44a4-8942-5b49cbf481a0  full-pipeline-audit text-embedding-v4  3       2026-06-15
+```
+
+**JSON 输出样例**:
+
+```json
+{
+  "datasets": [
+    {
+      "id": "a013f0a7-e660-4751-8ee7-15d3915220fb",
+      "name": "full-pipeline-rank",
+      "embed_model": "text-embedding-v4",
+      "chunk_count": 4,
+      "created_at": "2026-06-15T09:06:24.523152Z"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+把查询到的 UUID 直接喂给搜索:
+
+```bash
+DS=$(uv run rag-search list-datasets list --name-contains "python" --output json | jq -r '.datasets[0].id')
+uv run rag-search -q "Python 列表推导式" --dataset-id "$DS"
+```
+
 ### 3. `rag-eval` — 评估流水线
 
 ```bash
