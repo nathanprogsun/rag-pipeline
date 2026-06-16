@@ -1,39 +1,78 @@
-"""IngestPipeline: 单一 ``ingest(IngestSource) -> IngestResult`` 入口。"""
+"""IngestPipeline: ``ingest_many(targets) -> IngestOutcome`` 入口。"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 
+from rag.infra.pg.database import AsyncSessionLocal
 from rag.ingest.chunker import Chunker
 from rag.ingest.chunker._heading_re import extract_first_title
-from rag.ingest.chunker.types import ChunkContext
 from rag.ingest.normalizer import NoOpNormalizer, Normalizer
-from rag.ingest.reader import dispatch_bytes, read_url
-from rag.ingest.source import (
-    BufferSource,
-    FileSource,
-    IngestSource,
-    UrlSource,
+from rag.ingest.persist import persist as persist_chunks
+from rag.ingest.reader import dispatch_bytes
+from rag.ingest.reader.file import read_to_buffer
+from rag.ingest.types import (
+    Chunk,
+    DocMeta,
+    IngestOutcome,
+    IngestResult,
+    PersistConfig,
+    PersistOutcome,
+    TextDoc,
 )
-from rag.ingest.types import Chunk, DocMeta, IngestResult, TextDoc
 
 logger = logging.getLogger(__name__)
 
-
-def _derive_title(text_doc: TextDoc, warnings: list[str]) -> str | None:
-    """doc-level title 推导: 文本内 `#` / `<h1>` 第一项, 兜底 filename。"""
-    title = extract_first_title(text_doc.text)
-    if title:
-        return title
-    if text_doc.meta.filename:
-        return text_doc.meta.filename
-    warnings.append("title unavailable: no heading and no filename")
-    return None
+_MAX_FILE_BYTES: int = 100 * 1024 * 1024
+_SKIP_DIR_NAMES: frozenset[str] = frozenset({"__pycache__"})
 
 
-def _build_context(text_doc: TextDoc) -> ChunkContext:
-    """组装 Chunker 入参上下文。"""
-    return ChunkContext.from_meta(meta=text_doc.meta)
+def _file_eligible(path: Path, warnings: list[str]) -> bool:
+    if path.name.startswith("."):
+        return False
+    if any(part in _SKIP_DIR_NAMES for part in path.parts):
+        return False
+    try:
+        if path.stat().st_size > _MAX_FILE_BYTES:
+            warnings.append(f"skip oversized file (>{_MAX_FILE_BYTES} bytes): {path}")
+            return False
+    except OSError as exc:
+        warnings.append(f"stat failed for {path}: {exc}")
+        return False
+    return True
+
+
+def expand_paths(paths: list[Path]) -> tuple[list[Path], list[str]]:
+    """展开路径列表: 文件保留, 目录递归遍历 (遇目录即递归)。"""
+    expanded: list[Path] = []
+    warnings: list[str] = []
+    seen: set[Path] = set()
+
+    def visit(raw: Path) -> None:
+        if not raw.exists():
+            warnings.append(f"path not found: {raw}")
+            return
+        if raw.is_file():
+            if _file_eligible(raw, warnings) and raw not in seen:
+                seen.add(raw)
+                expanded.append(raw)
+            return
+        if raw.is_dir():
+            for child in sorted(raw.iterdir()):
+                visit(child)
+            return
+        warnings.append(f"skip non-file/non-dir path: {raw}")
+
+    for raw in paths:
+        visit(raw)
+    expanded.sort()
+    return expanded, warnings
+
+
+def _expand_files(targets: list[str]) -> tuple[list[Path], list[str]]:
+    return expand_paths([Path(t) for t in targets])
 
 
 class IngestPipeline:
@@ -41,106 +80,107 @@ class IngestPipeline:
         self,
         chunker: Chunker,
         normalizer: Normalizer | None = None,
-        *,
-        max_url_size: int = 1_000_000_000,
-        url_timeout_s: float = 600.0,
+        persist_config: PersistConfig | None = None,
     ) -> None:
         self.chunker = chunker
         self.normalizer: Normalizer = normalizer or NoOpNormalizer()
-        self._max_url_size = max_url_size
-        self._url_timeout_s = url_timeout_s
+        self.persist_config = persist_config
 
-    async def ingest(
+    @property
+    def persist_enabled(self) -> bool:
+        return self.persist_config is not None and self.persist_config.enabled
+
+    async def ingest_many(
         self,
-        source: IngestSource,
-        *,
-        get_format_text: bool = True,
-    ) -> IngestResult:
-        """IngestSource -> IngestResult: 全程 async。
+        targets: list[str],
+    ) -> IngestOutcome:
+        """批量 ingest; 目录递归展开, 大小超过限制的文件跳过。"""
+        # 1. 展开路径
+        files, warnings = _expand_files(targets)
+        if not files:
+            return IngestOutcome(items=[], warnings=warnings, errors=[])
 
-        Args:
-            source: ``FileSource`` / ``UrlSource`` / ``BufferSource`` 三选一。
-            get_format_text: 透传给 chunker, 决定 ``Chunk.text`` 是 ``format_text``
-                (csv/xlsx 的 md table 视图) 还是 ``raw_text``。默认 True。
+        # 2. 并行 ingest
+        results = await asyncio.gather(
+            *[self._process(file) for file in files],
+            return_exceptions=True,
+        )
+        items: list[IngestResult] = []
+        errors: list[tuple[str, BaseException]] = []
+        for file, outcome in zip(files, results, strict=True):
+            if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+                # CancelledError 等 BaseException-but-not-Exception: 透传, 不入 errors
+                raise outcome
+            if isinstance(outcome, Exception):
+                errors.append((str(file), outcome))
+                warnings.append(f"ingest failed for {file}: {outcome}")
+                logger.warning("ingest failed path=%s err=%s", file, outcome)
+            else:
+                items.append(outcome)
 
-        Returns:
-            ``IngestResult(chunks=..., title=..., doc_meta=..., warnings=...)``
+        return IngestOutcome(items=items, warnings=warnings, errors=errors)
 
-        Raises:
-            TypeError: ``source`` 不是三种合法子类之一。
-        """
-        if isinstance(source, FileSource):
-            text_doc = await self._read_file(source)
-        elif isinstance(source, UrlSource):
-            text_doc = await read_url(
-                source.url,
-                max_size=source.max_size,
-                timeout_s=source.timeout_s,
+    async def _maybe_persist(self, result: IngestResult) -> IngestResult:
+        cfg = self.persist_config
+        if cfg is None or not cfg.enabled:
+            return result
+
+        async with AsyncSessionLocal() as session:
+            pr = await persist_chunks(
+                session,
+                result,
+                dataset_id=cfg.dataset_id,
+                create_dataset=cfg.create_dataset,
+                dataset_name=cfg.dataset_name,
             )
-        elif isinstance(source, BufferSource):
-            filename = source.source.rsplit("/", 1)[-1]
-            if "." not in filename:
-                filename = f"{filename}.{source.file_type.lstrip('.')}"
-            # BufferSource 视为"已在内存中的文件流", datasource 归 file;
-            # 落库时再依据 source 前缀改判为 manual。
-            text_doc = await dispatch_bytes(
-                buffer=source.buf,
-                extension=source.file_type,
-                source=source.source,
-                datasource="file",
-                filename=filename,
-            )
-        else:
-            raise TypeError(f"unsupported IngestSource: {type(source).__name__}")
+        if cfg.create_dataset:
+            cfg.adopt(pr.dataset_id)
+        outcome = PersistOutcome(
+            dataset_id=pr.dataset_id,
+            dataset_name=pr.dataset_name,
+            old_chunk_count=pr.old_chunk_count,
+            new_chunk_count=pr.new_chunk_count,
+        )
+        return result.model_copy(update={"persist": outcome})
 
-        return await self._process(text_doc, get_format_text=get_format_text)
-
-    async def _read_file(self, source: FileSource) -> TextDoc:
-        """FileSource -> TextDoc: 复用 ``read_to_buffer`` 后 async dispatch。
-
-        不直接调 ``read_file`` (后者用 ``asyncio.run`` 包, 在已处于 event loop
-        时会抛 ``RuntimeError``)。
-        """
-        from rag.ingest.reader.file import read_to_buffer  # noqa: PLC0415
-
-        p = source.path
-        buffer = read_to_buffer(p)
+    async def _read_file(self, path: Path) -> TextDoc:
+        """Path -> TextDoc: 复用 ``read_to_buffer`` 后 async dispatch。"""
+        buffer = read_to_buffer(path)
         return await dispatch_bytes(
             buffer=buffer,
-            extension=p.suffix,
-            source=f"file://{p.resolve()}",
-            datasource="file",
-            filename=p.name,
+            extension=path.suffix,
+            filename=path.name,
         )
 
     async def _process(
-        self, text_doc: TextDoc, *, get_format_text: bool = True
+        self,
+        file: Path,
     ) -> IngestResult:
+        # 1. 读取文件
+        text_doc = await self._read_file(file)
         warnings: list[str] = []
 
-        # 先在 normalize 之前抽 title, 防 normalizer 改写 / 删除原 H1。
-        pre_normalize_title = _derive_title(text_doc, warnings)
-
+        # 2. 标准化
         text_doc = await self.normalizer.normalize(text_doc)
         text = text_doc.text
 
-        ctx = _build_context(text_doc)
+        # 3. 分块 (直接传 DocMeta, 不再走 ChunkContext 中转)
         chunks: list[Chunk] = self.chunker.split(
             text,
-            ctx=ctx,
+            meta=text_doc.meta,
             format_text=text_doc.format_text,
-            get_format_text=get_format_text,
+            get_format_text=True,
         )
 
-        # normalize 后再抽一次, 兜底 normalizer 自己注入新 H1 的场景;
-        # 优先级: 原始 H1 > 改写后 H1 > filename (来自 _derive_title 内部兜底)。
-        post_normalize_title = _derive_title(text_doc, warnings)
-        title = pre_normalize_title or post_normalize_title
         doc_meta: DocMeta = text_doc.meta
-
-        return IngestResult(
+        title = extract_first_title(text_doc.text) or text_doc.meta.filename
+        result = IngestResult(
             chunks=chunks,
             title=title,
             doc_meta=doc_meta,
             warnings=warnings,
         )
+
+        # 4. 存储
+        updated_result = await self._maybe_persist(result)
+        return updated_result
