@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import pytest
-from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -22,6 +21,7 @@ from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
     SearchSubgraph,
 )
+from tests._fakes import ConstantEmbeddings
 from tests.integration._db_helpers import (
     EMBED_DIM,
     create_dataset,
@@ -36,20 +36,8 @@ def _unit_vector(dim_index: int) -> list[float]:
     return vec
 
 
-class FakeEmbeddings(Embeddings):
-    """Real embedder interface. Returns unit vector (index 0)."""
-
-    async def aembed_query(self, text: str) -> list[float]:
-        return _unit_vector(0)
-
-    def embed_query(self, text: str) -> list[float]:
-        return _unit_vector(0)
-
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [_unit_vector(0) for _ in texts]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [_unit_vector(0) for _ in texts]
+_FAKE_EMB_VECTOR = _unit_vector(0)
+FakeEmbeddings = ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 # ---------- Helpers ----------

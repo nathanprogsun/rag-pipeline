@@ -18,7 +18,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.embeddings import Embeddings
 from pydantic import ValidationError
 
 from rag.domain.document import ScoredDocument
@@ -28,22 +27,10 @@ from rag.search.factory import (
     build_search_pipeline,
     make_llm_gen,
 )
+from tests._fakes import ConstantEmbeddings
 
-
-class _FakeEmbeddings(Embeddings):
-    """Minimal embedder for SearchPipelineDeps validation."""
-
-    async def aembed_query(self, text: str) -> list[float]:
-        return [0.0] * 1536
-
-    def embed_query(self, text: str) -> list[float]:
-        return [0.0] * 1536
-
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 1536 for _ in texts]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 1536 for _ in texts]
+_FAKE_EMB_VECTOR = [0.0] * 1536
+_FakeEmbeddings = ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 def _req(query: str = "test") -> SearchRequest:
@@ -55,13 +42,13 @@ def _req(query: str = "test") -> SearchRequest:
 
 def test_deps_required_fields() -> None:
     """embedder + llm are required."""
-    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings, llm=MagicMock())
     assert deps.embedder is not None
     assert deps.llm is not None
 
 
 def test_deps_defaults() -> None:
-    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings, llm=MagicMock())
     assert deps.vector_weight == 0.7
     assert deps.fulltext_weight == 0.3
     assert deps.rrf_k == 60
@@ -75,7 +62,7 @@ def test_deps_defaults() -> None:
 def test_deps_optional_rerank_client() -> None:
     rerank = MagicMock()
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(), llm=MagicMock(), rerank_client=rerank
+        embedder=_FakeEmbeddings, llm=MagicMock(), rerank_client=rerank
     )
     assert deps.rerank_client is rerank
 
@@ -83,14 +70,14 @@ def test_deps_optional_rerank_client() -> None:
 def test_deps_optional_audit_tap() -> None:
     audit = MagicMock()
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(), llm=MagicMock(), audit_tap=audit
+        embedder=_FakeEmbeddings, llm=MagicMock(), audit_tap=audit
     )
     assert deps.audit_tap is audit
 
 
 def test_deps_is_frozen() -> None:
     """Pydantic frozen=True: attribute assignment raises."""
-    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings, llm=MagicMock())
     with pytest.raises(ValidationError, match="frozen"):
         deps.top_k = 20  # type: ignore[misc]
 
@@ -99,7 +86,7 @@ def test_deps_is_frozen() -> None:
 
 
 def test_build_returns_pipeline_instance() -> None:
-    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=MagicMock())
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings, llm=MagicMock())
     pipeline = build_search_pipeline(deps)
     # Pipeline 暴露 ainvoke 方法
     assert hasattr(pipeline, "ainvoke")
@@ -108,7 +95,7 @@ def test_build_returns_pipeline_instance() -> None:
 
 def test_build_with_rerank() -> None:
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(),
+        embedder=_FakeEmbeddings,
         llm=MagicMock(),
         rerank_client=MagicMock(),
     )
@@ -118,7 +105,7 @@ def test_build_with_rerank() -> None:
 
 def test_build_with_audit_tap() -> None:
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(),
+        embedder=_FakeEmbeddings,
         llm=MagicMock(),
         audit_tap=MagicMock(),
     )
@@ -298,7 +285,7 @@ async def test_pipeline_ainvoke_returns_search_result(
     ai.content = "response [1](CITE)"
     llm.ainvoke = AsyncMock(return_value=ai)
 
-    deps = SearchPipelineDeps(embedder=_FakeEmbeddings(), llm=llm)
+    deps = SearchPipelineDeps(embedder=_FakeEmbeddings, llm=llm)
     pipeline = build_search_pipeline(deps)
     req = _req(query="hello")
 
@@ -358,7 +345,7 @@ async def test_pipeline_ainvoke_records_audit_when_req_audit_true(
     from rag.infra.observability.audit import AuditTap
 
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(),
+        embedder=_FakeEmbeddings,
         llm=llm,
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
@@ -414,7 +401,7 @@ async def test_pipeline_ainvoke_skips_audit_when_req_audit_false(
     from rag.infra.observability.audit import AuditTap
 
     deps = SearchPipelineDeps(
-        embedder=_FakeEmbeddings(),
+        embedder=_FakeEmbeddings,
         llm=llm,
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )

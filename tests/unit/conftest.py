@@ -11,12 +11,6 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 @pytest.fixture(scope="session")
-def sample_data_dir() -> Path:
-    """tests/data 目录: 10 个内置 sample.* fixture。"""
-    return DATA_DIR
-
-
-@pytest.fixture(scope="session")
 def sample_txt() -> Path:
     """tests/data/sample.txt fixture 路径。"""
     return DATA_DIR / "sample.txt"

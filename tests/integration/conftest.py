@@ -16,7 +16,6 @@ Ingest 端到端（真实 LLM + 真实 fixture）:
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest
 from langchain_core.embeddings import Embeddings
@@ -96,11 +95,6 @@ def _require_embedding_api_key() -> str:
         pytest.skip("OPENAI_EMBEDDING_API_KEY not configured")
     return raw
 
-
-@pytest.fixture(scope="session")
-def sample_data_dir() -> Path:
-    """tests/data 目录：10 个内置 sample.* fixture。"""
-    return Path(__file__).resolve().parent.parent / "data"
 
 
 @pytest.fixture(scope="session")
