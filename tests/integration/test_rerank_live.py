@@ -18,25 +18,24 @@ import uuid
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rag.config import settings
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import Citation, SearchRequest
 from rag.infra.llm.rerank import QwenRerank, get_rerank_model
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.search.orchestrator import SearchPipeline
 from rag.search.retrieve.rerank import NoOpRerankStage, RerankStageAdapter
+from tests.integration._db_helpers import (
+    create_dataset,
+    seed_chunks,
+)
 from tests.integration._retriever import make_subgraph
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Live fixtures & helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-EMBED_DIM: int = settings.openai_embedding_dim
 
 
 @pytest.fixture(scope="session")
@@ -186,41 +185,8 @@ async def test_real_rerank_weight_zero_preserves_text_ranking(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
 
 
-async def _seed_chunks(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    chunks: list[ChunkModel] = []
-    for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
 
 
 @pytest.mark.asyncio
@@ -235,8 +201,8 @@ async def test_real_orchestrator_with_rerank_full_chain(
     验证: query_ext (None) → 2 dataset fan-out → 真实 rerank → cite。
     rerank API 真实调用, 排序提升。
     """
-    ds = await _create_dataset(db_session, "rerank-fullchain")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "rerank-fullchain")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -300,8 +266,8 @@ async def test_real_noop_rerank_through_orchestrator(
     rerank 关闭时 (use_rerank=False), orchestrator 用 NoOp 跳过 stage 4。
     验证 NoOp 路径下整个链路仍然 work, 不残留 rerank_score。
     """
-    ds = await _create_dataset(db_session, "rerank-noop")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "rerank-noop")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 列表推导式 教程。"],

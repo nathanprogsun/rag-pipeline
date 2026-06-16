@@ -24,60 +24,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.config import settings
 from rag.eval.runner import EvalRunner
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.search.factory import SearchPipelineDeps, build_search_pipeline
-
-EMBED_DIM: int = settings.openai_embedding_dim
-
+from tests.integration._db_helpers import create_dataset, seed_chunks
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — real PG seeding
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
 
 
-async def _seed_chunks_with_real_embeddings(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    """真实 embedding 入库。"""
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    chunks: list[ChunkModel] = []
-    for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
 
 
 def _fake_llm() -> MagicMock:
@@ -104,8 +63,8 @@ async def test_real_eval_perfect_match_recall_one(
 
     seed 一个 chunk, eval dataset 用该 chunk id 作 ground_truth。
     """
-    ds = await _create_dataset(db_session, "eval-perfect")
-    chunks = await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "eval-perfect")
+    chunks = await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 列表推导式 教程。"],
@@ -151,8 +110,8 @@ async def test_real_eval_zero_match_recall_zero(
 
     seed Python chunk, 用随机生成的 UUID 作 ground_truth (不在 PG)。
     """
-    ds = await _create_dataset(db_session, "eval-zero")
-    await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "eval-zero")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 列表推导式 教程。"],
@@ -199,8 +158,8 @@ async def test_real_eval_multiple_queries_aggregate(
     - q2: ground_truth=Java chunk (完美命中)
     - q3: ground_truth=不存在的 chunk (零命中)
     """
-    ds = await _create_dataset(db_session, "eval-multi")
-    chunks = await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "eval-multi")
+    chunks = await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -264,8 +223,8 @@ async def test_real_eval_hit_rate_at_k(
 
     seed 多个 chunk, eval record 期望召回到 top-5 中任一。
     """
-    ds = await _create_dataset(db_session, "eval-hitrate")
-    chunks = await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "eval-hitrate")
+    chunks = await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[

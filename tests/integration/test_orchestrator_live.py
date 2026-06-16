@@ -33,20 +33,18 @@ import uuid
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rag.config import settings
 from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.search.orchestrator import SearchPipeline
+from tests.integration._db_helpers import (
+    create_dataset,
+    seed_chunks,
+)
 from tests.integration._retriever import make_subgraph
 
 # 真实 embedding 维度: 与 settings.openai_embedding_dim 对齐
-EMBED_DIM: int = settings.openai_embedding_dim
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +52,7 @@ EMBED_DIM: int = settings.openai_embedding_dim
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# 中文测试语料, 用于 _seed_chunks_with_real_embeddings
+# 中文测试语料, 用于 seed_chunks
 CORPUS_PYTHON: dict[str, list[str]] = {
     "python-tutorial": [
         "Python 是一门解释型、动态类型的高级编程语言, 语法简洁易读。",
@@ -74,53 +72,8 @@ CORPUS_PYTHON: dict[str, list[str]] = {
 }
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str, *, embed_model: str | None = None
-) -> uuid.UUID:
-    """在真实 PG 中创建 dataset 行 (含真实 embed_model / embed_dim)。"""
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=embed_model or settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
 
 
-async def _seed_chunks_with_real_embeddings(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    """真实 embedding 入库: 用 live_embed_model 真实调 embedding API,
-    把结果作为 chunk 的 embedding 列。中文/英文统一处理。
-    """
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    assert len(embeddings) == len(texts)
-    chunks: list[ChunkModel] = []
-    for text_content, embedding in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id,
-            text=text_content,
-            embedding=embedding,
-        )
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    # 中文 tsvector 用 ChineseTokenizer 真实分词
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
 
 
 async def _seed_corpus(
@@ -139,8 +92,8 @@ async def _seed_corpus(
     """
     ids: dict[str, uuid.UUID] = {}
     for ds_name, texts in dataset_specs.items():
-        ds_id = await _create_dataset(db_session, ds_name)
-        await _seed_chunks_with_real_embeddings(
+        ds_id = await create_dataset(db_session, ds_name)
+        await seed_chunks(
             db_session,
             dataset_id=ds_id,
             texts=texts,
@@ -213,15 +166,15 @@ async def test_real_dataset_isolation(
     orchestrator 的职责是: 跨 dataset 召回时, 每个 ScoredDocument.dataset_id
     都精确指向它被检索的 dataset, 不会发生 dataset_id 错位。
     """
-    ds_python = await _create_dataset(db_session, "ds-python-only")
-    ds_java = await _create_dataset(db_session, "ds-java-only")
-    py_chunks = await _seed_chunks_with_real_embeddings(
+    ds_python = await create_dataset(db_session, "ds-python-only")
+    ds_java = await create_dataset(db_session, "ds-java-only")
+    py_chunks = await seed_chunks(
         db_session,
         dataset_id=ds_python,
         texts=CORPUS_PYTHON["python-tutorial"],
         embed_model=live_embed_model,
     )
-    java_chunks = await _seed_chunks_with_real_embeddings(
+    java_chunks = await seed_chunks(
         db_session,
         dataset_id=ds_java,
         texts=CORPUS_PYTHON["java-tutorial"],

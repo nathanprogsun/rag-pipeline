@@ -9,11 +9,8 @@
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -21,14 +18,16 @@ from sqlalchemy.ext.asyncio import (
 
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
     SearchSubgraph,
 )
+from tests.integration._db_helpers import (
+    EMBED_DIM,
+    create_dataset,
+    set_ts_tokens,
+)
 from tests.integration._retriever import RepoRetriever
-
-EMBED_DIM = 1536
 
 
 def _unit_vector(dim_index: int) -> list[float]:
@@ -56,26 +55,8 @@ class FakeEmbeddings(Embeddings):
 # ---------- Helpers ----------
 
 
-async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model="fake",
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
 
 
-async def _set_tsvector(
-    db_session: AsyncSession, chunk_id: uuid.UUID, content: str
-) -> None:
-    """Set ts_tokens for fulltext search (Chinese-tokenized)."""
-    await db_session.execute(
-        text("UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"),
-        {"t": content, "id": chunk_id},
-    )
 
 
 # ---------- Tests ----------
@@ -93,7 +74,7 @@ async def test_subgraph_fuses_vector_and_fulltext(
     - All 3 have fulltext content matching the query
     - SearchSubgraph returns all 3 chunks, top by RRF.
     """
-    dataset_id = await _create_dataset(db_session, "subgraph-fuse-test")
+    dataset_id = await create_dataset(db_session, "subgraph-fuse-test")
 
     chunks = []
     for chunk_text in ["Python 教程", "Python 入门", "Python 进阶"]:
@@ -104,7 +85,7 @@ async def test_subgraph_fuses_vector_and_fulltext(
         chunks.append(chunk)
     await db_session.flush()
     for c in chunks:
-        await _set_tsvector(db_session, c.id, ChineseTokenizer().build_tsvector(c.text))
+        await set_ts_tokens(db_session, c.id, ChineseTokenizer().build_tsvector(c.text))
     await db_session.commit()
 
     vector_retriever = RepoRetriever(
@@ -145,7 +126,7 @@ async def test_subgraph_vector_only_match(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Vector match exists, fulltext does not -> still returns results."""
-    dataset_id = await _create_dataset(db_session, "subgraph-vector-only-test")
+    dataset_id = await create_dataset(db_session, "subgraph-vector-only-test")
 
     # Embedding matches, but fulltext content is different
     chunk = ChunkModel(
@@ -155,7 +136,7 @@ async def test_subgraph_vector_only_match(
     )
     db_session.add(chunk)
     await db_session.flush()
-    await _set_tsvector(
+    await set_ts_tokens(
         db_session,
         chunk.id,
         ChineseTokenizer().build_tsvector("zzz unmatched text"),
@@ -196,7 +177,7 @@ async def test_subgraph_empty_result_when_no_chunks(
     This test passes even with pre-existing chunk_repo bugs because the
     retrievers return empty (no chunks to find) before hitting the bugs.
     """
-    dataset_id = await _create_dataset(db_session, "subgraph-empty-test")
+    dataset_id = await create_dataset(db_session, "subgraph-empty-test")
 
     vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -230,7 +211,7 @@ async def test_subgraph_raises_on_empty_query(
     This test passes regardless of chunk_repo bugs because the validation
     happens before any retriever is invoked.
     """
-    dataset_id = await _create_dataset(db_session, "subgraph-validation-test")
+    dataset_id = await create_dataset(db_session, "subgraph-validation-test")
 
     vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -259,18 +240,18 @@ async def test_subgraph_per_dataset_isolation(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Two datasets; each subgraph returns only its own dataset's chunks."""
-    ds_a = await _create_dataset(db_session, "subgraph-isolation-a")
-    ds_b = await _create_dataset(db_session, "subgraph-isolation-b")
+    ds_a = await create_dataset(db_session, "subgraph-isolation-a")
+    ds_b = await create_dataset(db_session, "subgraph-isolation-b")
 
     chunk_a = ChunkModel(dataset_id=ds_a, text="in A", embedding=_unit_vector(0))
     db_session.add(chunk_a)
     chunk_b = ChunkModel(dataset_id=ds_b, text="in B", embedding=_unit_vector(0))
     db_session.add(chunk_b)
     await db_session.flush()
-    await _set_tsvector(
+    await set_ts_tokens(
         db_session, chunk_a.id, ChineseTokenizer().build_tsvector("in A")
     )
-    await _set_tsvector(
+    await set_ts_tokens(
         db_session, chunk_b.id, ChineseTokenizer().build_tsvector("in B")
     )
     await db_session.commit()

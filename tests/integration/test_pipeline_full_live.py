@@ -23,62 +23,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.config import settings
 from rag.domain.search import SearchRequest
 from rag.infra.observability.audit import AuditTap, read_jsonl_records
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.search.factory import SearchPipelineDeps, build_search_pipeline
-
-EMBED_DIM: int = settings.openai_embedding_dim
-
+from tests.integration._db_helpers import create_dataset, seed_chunks
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — real PG seeding with real embeddings
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
 
 
-async def _seed_chunks_with_real_embeddings(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    """Seed chunks with REAL embeddings via live_embed_model.aembed_documents."""
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    chunks: list[ChunkModel] = []
-    for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    # tsvector 用 ChineseTokenizer 真实分词 (fulltext search 需要)
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
 
 
 def _fake_llm(response_text: str = "answer [1](CITE) and [2](CITE)") -> MagicMock:
@@ -111,8 +69,8 @@ async def test_real_build_full_pipeline_end_to_end(
 
     验证: query 能召回 seed 的相关 chunk.
     """
-    ds = await _create_dataset(db_session, "full-pipeline-1")
-    await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "full-pipeline-1")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -154,8 +112,8 @@ async def test_real_build_full_pipeline_with_audit(
     - req.audit=True → AuditRecord.from_search_result → AuditTap.record
     - 真实 NDJSON file 写入 → read_jsonl_records 真实读回
     """
-    ds = await _create_dataset(db_session, "full-pipeline-audit")
-    await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "full-pipeline-audit")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -222,8 +180,8 @@ async def test_real_build_full_pipeline_multiple_requests(
     - 每次 request 都真实调 live_embed_model.aembed_query (无缓存)
     - NDJSON 每行独立记录 (1 request = 1 line)
     """
-    ds = await _create_dataset(db_session, "full-pipeline-multi")
-    await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "full-pipeline-multi")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 教程。"],
@@ -258,8 +216,8 @@ async def test_real_build_full_pipeline_cosine_ranking(
     seed 4 个 chunk, 其中"Python 列表推导式"与 query "Python 列表推导式" 语义最接近,
     应被排到 top (高 cosine similarity).
     """
-    ds = await _create_dataset(db_session, "full-pipeline-rank")
-    await _seed_chunks_with_real_embeddings(
+    ds = await create_dataset(db_session, "full-pipeline-rank")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[

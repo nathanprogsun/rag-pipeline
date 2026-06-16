@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
-
-_TESTS_ROOT = Path(__file__).resolve().parents[2]
-if str(_TESTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_TESTS_ROOT))
 
 from data import (  # noqa: E402
     SAMPLE_CHAT_EXPORT_MD,
