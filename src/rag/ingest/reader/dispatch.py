@@ -1,8 +1,7 @@
-"""Reader dispatch: bytes + extension -> TextDoc, 补 DocMeta."""
+"""Reader dispatch: bytes + extension -> TextDoc, 补 DocMeta。"""
 
 from __future__ import annotations
 
-import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
@@ -18,7 +17,7 @@ from rag.ingest.reader.extensions import (
     text_adapter,
     xlsx_adapter,
 )
-from rag.ingest.reader.types import FormatReaderResult, UploadFileHandler
+from rag.ingest.reader.types import FormatReaderResult
 from rag.ingest.types import TextDoc
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,6 @@ async def dispatch_bytes(
     *,
     encoding: str = "utf-8",
     filename: str | None = None,
-    upload_file: UploadFileHandler | None = None,
 ) -> TextDoc:
     """按 extension 路由到 AsyncFormatAdapter, 构造 TextDoc。
 
@@ -53,11 +51,10 @@ async def dispatch_bytes(
         extension: 后缀 (无 ``.`` 前缀, 已 lowercase)
         encoding: 文本类 adapter 的字符编码
         filename: 展示用文件名
-        upload_file: 可选, async 上传回调 (docx 内嵌图, html base64 图)
 
     Returns:
         TextDoc { text=raw_text, format_text=adapter.format_text or None,
-                 meta=DocMeta+filename, images=[...] }
+                 meta=DocMeta+filename }
 
     Raises:
         RAGError: ``code=reader.unsupported`` — 后缀无对应 adapter。
@@ -74,10 +71,7 @@ async def dispatch_bytes(
         )
 
     logger.info("reader.start ext=%s size=%d encoding=%s", ext, len(buffer), encoding)
-    if "upload_file" in inspect.signature(adapter).parameters:
-        result = await adapter(buffer, encoding=encoding, upload_file=upload_file)
-    else:
-        result = await adapter(buffer, encoding=encoding)
+    result = await adapter(buffer, encoding=encoding)
     logger.info("reader.done ext=%s text_len=%d", ext, len(result.raw_text))
 
     full_meta = result.meta.model_copy(update={"filename": filename})
@@ -85,7 +79,6 @@ async def dispatch_bytes(
         text=result.raw_text,
         format_text=result.format_text,
         meta=full_meta,
-        images=list(result.images),
     )
 
 

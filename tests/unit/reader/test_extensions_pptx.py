@@ -63,7 +63,6 @@ async def test_pptx_extension_adapter_minimal() -> None:
     )  # parse_office 不返回 page_count, 与原 adapter 一致
     # 薄封装不抽图片
     assert result.format_text is None
-    assert result.images == []
 
 
 # ── 真实 fixture ──
@@ -77,7 +76,6 @@ async def test_pptx_extension_adapter_against_real_fixture() -> None:
     assert result.meta.mime == PPTX_MIME
     assert isinstance(result.raw_text, str)
     assert len(result.raw_text) > 0
-    assert result.images == []
 
 
 # ── 错误包装 ──

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from rag.ingest.reader.extensions.text import TEXT_MIME, text_adapter
-from rag.ingest.reader.types import UploadedFileResult
 
 
 @pytest.mark.asyncio
@@ -17,7 +16,6 @@ async def test_text_adapter_txt_plain() -> None:
     assert result.meta.mime == TEXT_MIME
     assert result.meta.mime == "text/plain"
     assert result.format_text is None
-    assert result.images == []
 
 
 @pytest.mark.asyncio
@@ -48,24 +46,8 @@ async def test_text_adapter_gbk_encoding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_text_adapter_md_base64_image_upload() -> None:
-    """markdown 含 base64 data URL + upload_file mock → 图被替换为 key。"""
-    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg=="
-    md = f"# Doc\n\n![pic](data:image/png;base64,{tiny_png_b64})\n"
-
-    async def uploader(name: str, mime: str, buf: bytes) -> UploadedFileResult:
-        return {"key": "s3://bucket/key.png"}
-
-    result = await text_adapter(md.encode("utf-8"), upload_file=uploader)
-
-    assert "data:image" not in result.raw_text
-    assert "s3://bucket/key.png" in result.raw_text
-    assert "# Doc" in result.raw_text
-
-
-@pytest.mark.asyncio
-async def test_text_adapter_md_base64_no_upload_strips() -> None:
-    """markdown 含 base64 + upload_file=None → 整段 data URL 删除。"""
+async def test_text_adapter_md_base64_image_strips() -> None:
+    """markdown 含 base64 data URL → 整段 data URL 被删除 (避免大体积 base64 残留)。"""
     tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg=="
     md = f"intro\n\n![pic](data:image/png;base64,{tiny_png_b64})\n\nend"
     result = await text_adapter(md.encode("utf-8"))

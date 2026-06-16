@@ -19,14 +19,13 @@ class DocMeta(BaseModel):
 
 
 class TextDoc(BaseModel):
-    """Reader 与 Normalizer 共同的产物: 文本 + 元数据 + (可选) 图片引用。"""
+    """Reader 与 Normalizer 共同的产物: 文本 + 元数据。"""
 
     model_config = ConfigDict(frozen=True)
 
     text: str
     format_text: str | None = None
     meta: DocMeta
-    images: list[str] = Field(default_factory=list)
 
 
 class ChunkMetadata(BaseModel):

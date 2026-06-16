@@ -26,7 +26,7 @@ from rag.ingest.reader.extensions.pdf import PDF_MIME, pdf_adapter
 
 
 def test_pdf_extension_adapter_against_real_sample() -> None:
-    """真实 sample.pdf (3 页) → meta 全字段 + raw_text 非空 + images=[]。"""
+    """真实 sample.pdf (3 页) → meta 全字段 + raw_text 非空。"""
     buf = SAMPLE_PDF.read_bytes()
     result = asyncio.run(pdf_adapter(buf))
 
@@ -37,9 +37,8 @@ def test_pdf_extension_adapter_against_real_sample() -> None:
     assert isinstance(result.raw_text, str)
     # raw_text 应含 sample.pdf 文本内容
     assert len(result.raw_text) > 0
-    # 薄封装: format_text/images 全空
+    # 薄封装: format_text 全空
     assert result.format_text is None
-    assert result.images == []
 
 
 # ── 错误包装 ──

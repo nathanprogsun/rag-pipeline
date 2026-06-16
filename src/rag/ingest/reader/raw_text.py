@@ -1,25 +1,16 @@
-"""raw text 读取 + 编码兜底 + markdown base64 图抽取。
+"""raw text 读取 + 编码兜底。
 
 设计:
  - 不抛编码异常: 任何编码失败都退到 ``buffer.decode('utf-8', errors='replace')``。
- - 图上传失败也走 fallback: 上传函数异常时把 data URL 整段删除。
- - `UploadFileHandler` 是 `Awaitable` 形态, 本模块所有 IO 都走 `async`。
+ - markdown 内的 base64 图片: 直接整段删除, 避免大体积数据残留到下游。
 """
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import codecs
 import logging
 import re
 from typing import Final
-
-from rag.ingest.reader.types import (
-    UploadedFileResult,
-    UploadFileHandler,
-    mime_to_extension,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +19,6 @@ _MD_BASE64_IMAGE_RE: Final[re.Pattern[str]] = re.compile(
     r"""!\[([^\]]*)\]\(data:([^;]+);base64,([A-Za-z0-9+/=]+)\)""",
     re.IGNORECASE,
 )
-
-_BASE64_UPLOAD_CONCURRENCY: Final[int] = 5
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 编码白名单 + 兜底
@@ -176,83 +165,25 @@ def _decode_buffer(buffer: bytes, encoding: str) -> str:
         return buffer.decode("utf-8", errors="replace")
 
 
-async def _process_md_base64_images(
-    text: str,
-    *,
-    upload_file: UploadFileHandler | None,
-) -> str:
-    """把 markdown 内 ``![alt](data:...;base64,...)`` 替换为上传 key 或删除。"""
-    matches = list(_MD_BASE64_IMAGE_RE.finditer(text))
-    if not matches:
-        return text
-
-    if upload_file is None:
-        return _MD_BASE64_IMAGE_RE.sub("", text)
-
-    replacements = await _upload_md_base64_concurrent(matches, upload_file)
-
-    out: list[str] = []
-    cursor = 0
-    for match, replacement in zip(matches, replacements, strict=True):
-        out.append(text[cursor : match.start()])
-        out.append(replacement)
-        cursor = match.end()
-    out.append(text[cursor:])
-    return "".join(out)
-
-
-async def _upload_md_base64_concurrent(
-    matches: list[re.Match[str]],
-    upload_file: UploadFileHandler,
-) -> list[str]:
-    """并发上传 markdown base64 图, 控制 Semaphore=5。"""
-    sem = asyncio.Semaphore(_BASE64_UPLOAD_CONCURRENCY)
-
-    async def _one(index: int, match: re.Match[str]) -> str:
-        alt = match.group(1)
-        mime = match.group(2)
-        b64 = match.group(3)
-        async with sem:
-            try:
-                image_bytes = base64.b64decode(b64, validate=True)
-            except Exception as e:
-                logger.warning("md base64 decode failed (mime=%s): %s", mime, e)
-                return ""
-            ext = mime_to_extension(mime)
-            filename = f"md_base64_{index}.{ext}"
-            try:
-                result: UploadedFileResult = await upload_file(
-                    filename, mime, image_bytes
-                )
-            except Exception as e:
-                logger.warning("md base64 upload failed (mime=%s): %s", mime, e)
-                return ""
-            key = result.get("key", "") if isinstance(result, dict) else ""
-            if not key:
-                return ""
-            return f"![{alt}]({key})"
-
-    return await asyncio.gather(
-        *(_one(i, m) for i, m in enumerate(matches)),
-    )
+def _strip_md_base64_images(text: str) -> str:
+    """把 markdown 内 ``![alt](data:...;base64,...)`` 整段删除, 避免大体积 base64 残留。"""
+    return _MD_BASE64_IMAGE_RE.sub("", text)
 
 
 async def read_raw_text(
     buffer: bytes,
     encoding: str = "utf-8",
-    upload_file: UploadFileHandler | None = None,
 ) -> str:
-    """bytes → 解码文本 (+ 可选 base64 图抽取)。
+    """bytes → 解码文本 (含 markdown base64 图剥离)。
 
     Args:
         buffer: 文件二进制内容。
         encoding: 文本编码 (大小写不敏感)。空字符串 / 未知编码 / 解码失败
             都退到 ``utf-8`` + ``errors='replace'``。
-        upload_file: 可选, markdown 内 base64 图的上传回调。
 
     Returns:
         解码后的文本; 编码阶段异常均不抛出。
     """
     resolved = resolve_text_encoding(buffer, encoding)
     text = _decode_buffer(buffer, resolved)
-    return await _process_md_base64_images(text, upload_file=upload_file)
+    return _strip_md_base64_images(text)

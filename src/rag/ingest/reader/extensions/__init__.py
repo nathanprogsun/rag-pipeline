@@ -7,7 +7,6 @@ md 与 htm 是 alias。
 
 from __future__ import annotations
 
-from rag.ingest.reader.extensions.base import UploadedFileResult, UploadFileHandler
 from rag.ingest.reader.extensions.csv import csv_adapter
 from rag.ingest.reader.extensions.docx import docx_adapter
 from rag.ingest.reader.extensions.html import html_adapter

@@ -6,7 +6,6 @@ def test_textdoc_construction() -> None:
     assert text_doc.text == "hello"
     assert text_doc.meta.filename == "a.txt"
     assert text_doc.meta.page_count is None
-    assert text_doc.images == []
 
 
 def test_docmeta_defaults() -> None:
@@ -16,14 +15,13 @@ def test_docmeta_defaults() -> None:
     assert meta.page_count is None
 
 
-def test_textdoc_with_images() -> None:
+def test_textdoc_with_format_text() -> None:
     text_doc = TextDoc(
         text="# H1\ncontent",
         meta=DocMeta(),
-        images=[],
+        format_text="| a | b |",
     )
-    assert text_doc.images == []
-    assert text_doc.format_text is None
+    assert text_doc.format_text == "| a | b |"
 
 
 def test_chunk_metadata_default_index_zero() -> None:

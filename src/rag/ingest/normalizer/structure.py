@@ -153,7 +153,6 @@ class StructureNormalizer(Normalizer):
             text=result.result_text,
             meta=doc.meta,
             format_text=doc.format_text,
-            images=list(doc.images),
         )
 
     async def process(self, raw_text: str) -> ResultDocument:

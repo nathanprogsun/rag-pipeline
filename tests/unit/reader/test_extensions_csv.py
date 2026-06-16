@@ -32,7 +32,6 @@ async def test_csv_basic() -> None:
     assert result.meta.mime == CSV_MIME
     assert result.meta.mime == "text/csv"
     assert result.format_text is not None
-    assert result.images == []
     # 3 列, header + 2 数据行
     assert "Alice" in result.raw_text
 

@@ -9,12 +9,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from rag.infra.llm.tokenizer import count_tokens
 from rag.ingest.normalizer import (
     NoOpNormalizer,
     StructuredText,
     StructureMode,
     StructureNormalizer,
 )
+from rag.ingest.normalizer.structure import _extract_structured_result
 from rag.ingest.types import DocMeta, TextDoc
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +37,7 @@ def _make_chat_model(result: StructuredText | Exception) -> MagicMock:
 
 
 def _raw_doc(text: str = "plain text body") -> TextDoc:
-    return TextDoc(text=text, meta=DocMeta(filename="x.txt", datasource="file"))
+    return TextDoc(text=text, meta=DocMeta(filename="x.txt"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +49,7 @@ async def test_forbid_mode_skips() -> None:
     """mode=FORBID → skipped=True, text 保持原样, LLM 不被调。"""
     fake_model = _make_chat_model(StructuredText(result_text="LLM-OUTPUT", summary="x"))
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORBID)
-    result = await n.normalize_with_result(_raw_doc("hello"))
+    result = await n.process("hello")
     assert result.skipped is True
     assert result.degraded is False
     assert result.result_text == "hello"
@@ -59,7 +61,7 @@ async def test_forbid_mode_skips() -> None:
 async def test_none_chat_model_skips() -> None:
     """chat_model=None → skipped=True。"""
     n = StructureNormalizer(chat_model=None, mode=StructureMode.AUTO)
-    result = await n.normalize_with_result(_raw_doc("hello"))
+    result = await n.process("hello")
     assert result.skipped is True
     assert result.result_text == "hello"
 
@@ -76,7 +78,7 @@ async def test_auto_with_markdown_headers_skips() -> None:
     )
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.AUTO)
     text = "# Title 1\n\nbody 1\n\n## Title 2\n\nbody 2"
-    result = await n.normalize_with_result(_raw_doc(text))
+    result = await n.process(text)
     assert result.skipped is True
     assert result.result_text == text
     fake_model.ainvoke.assert_not_called()
@@ -87,7 +89,7 @@ async def test_auto_with_single_markdown_header_invokes_llm() -> None:
     parsed = StructuredText(result_text="# Only One Title\n\nrewritten", summary="")
     fake_model = _make_chat_model(parsed)
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.AUTO)
-    result = await n.normalize_with_result(_raw_doc("# Only One Title\n\nbody"))
+    result = await n.process("# Only One Title\n\nbody")
     assert result.skipped is False
     assert result.degraded is False
     assert result.result_text == "# Only One Title\n\nrewritten"
@@ -105,7 +107,7 @@ async def test_force_mode_always_invokes_llm() -> None:
     fake_model = _make_chat_model(parsed)
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORCE)
     text = "# A\n\n## B\n\nbody"  # 即使有 2 个标题, FORCE 也调
-    result = await n.normalize_with_result(_raw_doc(text))
+    result = await n.process(text)
     assert result.skipped is False
     assert result.degraded is False
     assert result.result_text == "LLM-replaced"
@@ -121,18 +123,65 @@ async def test_llm_exception_degrades() -> None:
     """LLM 抛任何异常 → degraded=True, text=raw, 不向上抛。"""
     fake_model = _make_chat_model(RuntimeError("llm down"))
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORCE)
-    result = await n.normalize_with_result(_raw_doc("important raw text"))
+    result = await n.process("important raw text")
     assert result.degraded is True
     assert result.skipped is False
     assert result.result_text == "important raw text"
     assert result.input_tokens == 0
 
 
+async def test_llm_returns_none_degrades() -> None:
+    """structured output 连续无 tool_call → degraded=True, 不抛 AttributeError。"""
+    fake_model = MagicMock()
+    fake_model.ainvoke = AsyncMock(return_value=None)
+    n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORCE)
+    result = await n.process("no structure here")
+    assert result.degraded is True
+    assert result.result_text == "no structure here"
+    assert fake_model.ainvoke.await_count == 3
+
+
+async def test_llm_retries_after_no_tool_call() -> None:
+    """首次无 tool_call、第二次成功 → 不降级。"""
+    parsed = StructuredText(result_text="# OK\n\nbody", summary="")
+    fake_model = MagicMock()
+    fake_model.ainvoke = AsyncMock(
+        side_effect=[
+            {
+                "parsed": None,
+                "parsing_error": None,
+                "raw": MagicMock(
+                    response_metadata={"finish_reason": "stop"},
+                    tool_calls=[],
+                ),
+            },
+            parsed,
+        ]
+    )
+    n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORCE)
+    result = await n.process("plain text")
+    assert result.degraded is False
+    assert result.result_text == "# OK\n\nbody"
+    assert fake_model.ainvoke.await_count == 2
+
+
+def test_extract_structured_result_reasoning_only_stop() -> None:
+    raw = MagicMock(
+        response_metadata={"finish_reason": "stop"},
+        tool_calls=[],
+    )
+    parsed, reason = _extract_structured_result(
+        {"parsed": None, "parsing_error": None, "raw": raw}
+    )
+    assert parsed is None
+    assert "without tool_calls" in reason
+
+
 async def test_llm_output_parser_error_degrades() -> None:
     """OutputParserException 类异常 → 降级。"""
     fake_model = _make_chat_model(ValueError("schema mismatch"))
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.AUTO)
-    result = await n.normalize_with_result(_raw_doc("no structure here"))
+    result = await n.process("no structure here")
     assert result.degraded is True
     assert result.result_text == "no structure here"
 
@@ -152,7 +201,7 @@ async def test_long_text_is_truncated_before_llm() -> None:
         max_input_chars=100,
     )
     long_text = "x" * 500
-    await n.normalize_with_result(_raw_doc(long_text))
+    await n.process(long_text)
 
     # ainvoke 被调一次
     fake_model.ainvoke.assert_called_once()
@@ -166,15 +215,14 @@ async def test_long_text_is_truncated_before_llm() -> None:
 
 
 async def test_token_estimation_reported() -> None:
-    """input/output_tokens 字段基于字符数 // 4 估算。"""
+    """input/output_tokens 字段由 count_tokens 估算。"""
     parsed = StructuredText(result_text="a" * 80, summary="")
     fake_model = _make_chat_model(parsed)
     n = StructureNormalizer(chat_model=fake_model, mode=StructureMode.FORCE)
-    # 输入 200 chars (无 markdown, AUTO 也会调) → 估 50 input tokens
     text = "x" * 200
-    result = await n.normalize_with_result(_raw_doc(text))
-    assert result.input_tokens == 50
-    assert result.output_tokens == 20  # 80 // 4
+    result = await n.process(text)
+    assert result.input_tokens == count_tokens(text)
+    assert result.output_tokens == count_tokens(parsed.result_text)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,7 +274,6 @@ async def test_normalize_returns_text_doc() -> None:
     doc = await n.normalize(raw)
     assert doc.text == "rewritten body"
     assert doc.meta is raw.meta
-    assert doc.images == []
 
 
 async def test_normalize_skip_returns_same_text() -> None:
@@ -270,7 +317,7 @@ async def test_normalize_preserves_format_text() -> None:
     raw = TextDoc(
         text="raw",
         format_text="| a | b |",
-        meta=DocMeta(filename="x.csv", datasource="file"),
+        meta=DocMeta(filename="x.csv"),
     )
     doc = await n.normalize(raw)
     assert doc.format_text == "| a | b |"
@@ -282,7 +329,7 @@ async def test_noop_normalizer_does_not_modify_meta() -> None:
     raw = _raw_doc("x")
     doc = await n.normalize(raw)
     assert doc.meta.filename == "x.txt"
-    assert doc.meta.datasource == "file"
+    assert doc.meta.filename is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

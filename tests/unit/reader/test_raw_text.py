@@ -6,7 +6,6 @@ import pytest
 
 from rag.ingest.reader.raw_text import (
     RAW_ENCODING_LIST,
-    UploadedFileResult,
     detect_text_encoding,
     read_raw_text,
     resolve_text_encoding,
@@ -75,7 +74,7 @@ async def test_read_raw_text_auto_detects_gbk() -> None:
     buf = plain.encode("gbk")
     text = await read_raw_text(buf, encoding="utf-8")
     assert "调仓完成" in text
-    assert "\ufffd" not in text
+    assert "�" not in text
 
 
 def test_resolve_text_encoding_respects_explicit_gbk() -> None:
@@ -103,7 +102,7 @@ async def test_raw_text_invalid_encoding_falls_back_without_raising() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2.5 base64 图抽取
+# 2.5 base64 图剥离
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -113,59 +112,18 @@ _TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD
 
 
 @pytest.mark.asyncio
-async def test_raw_text_base64_image_no_upload_replaces_with_empty() -> None:
-    """upload_file=None → 整段 data URL 被删除 (留空字符串)。"""
+async def test_raw_text_base64_image_stripped() -> None:
+    """markdown 内 base64 data URL → 整段被删除 (避免大体积 base64 残留)。"""
     md = f"# Title\n\n![png](data:image/png;base64,{_TINY_PNG_B64})\n\nafter image"
-    text = await read_raw_text(md.encode("utf-8"), encoding="utf-8", upload_file=None)
+    text = await read_raw_text(md.encode("utf-8"), encoding="utf-8")
     assert "data:image" not in text
     assert "after image" in text
     assert text.startswith("# Title")
 
 
 @pytest.mark.asyncio
-async def test_raw_text_base64_image_with_upload_replaces_with_key() -> None:
-    """upload_file mock 返回 {key: 's3://key/xx.png'} → markdown 中 data URL 替换为 key。"""
-    md = f"![alt](data:image/png;base64,{_TINY_PNG_B64})"
-    captured: list[tuple[str, str, bytes]] = []
-
-    async def uploader(name: str, mime: str, buffer: bytes) -> UploadedFileResult:
-        captured.append((name, mime, buffer))
-        return {"key": "uploaded/abc.png"}
-
-    text = await read_raw_text(
-        md.encode("utf-8"), encoding="utf-8", upload_file=uploader
-    )
-
-    assert "data:image" not in text
-    assert "uploaded/abc.png" in text
-    # 上传回调收到 (name=md_base64_0.png, mime=image/png, bytes=真实 PNG bytes)
-    assert len(captured) == 1
-    name, mime, buf = captured[0]
-    assert name.endswith(".png")
-    assert mime == "image/png"
-    assert buf.startswith(b"\x89PNG\r\n\x1a\n")  # PNG magic bytes
-
-
-@pytest.mark.asyncio
-async def test_raw_text_base64_image_upload_failure_yields_empty() -> None:
-    """上传回调抛异常 → 整段 data URL 删除 (不传播异常)。"""
-    md = f"![x](data:image/png;base64,{_TINY_PNG_B64})"
-
-    async def broken_uploader(
-        name: str, mime: str, buffer: bytes
-    ) -> UploadedFileResult:
-        raise RuntimeError("S3 down")
-
-    text = await read_raw_text(
-        md.encode("utf-8"), encoding="utf-8", upload_file=broken_uploader
-    )
-    assert "data:image" not in text
-    assert text == ""
-
-
-@pytest.mark.asyncio
 async def test_raw_text_plain_text_no_base64_passthrough() -> None:
-    """纯文本无 data URL → upload_file=None 也照常输出。"""
+    """纯文本无 data URL → 直接输出。"""
     buf = b"no images here"
-    text = await read_raw_text(buf, encoding="utf-8", upload_file=None)
+    text = await read_raw_text(buf, encoding="utf-8")
     assert text == "no images here"
