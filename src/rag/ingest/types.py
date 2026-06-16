@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from rag.domain.enums import (
-    IngestDatasource,
-    StoredDatasource,
-    ingest_to_stored_datasource,
-)
 
 
 class DocMeta(BaseModel):
@@ -19,8 +14,6 @@ class DocMeta(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     filename: str | None = None
-    source: str = ""
-    datasource: IngestDatasource = "file"
     mime: str | None = None
     encoding: str = "utf-8"
     size_bytes: int = 0
@@ -28,17 +21,6 @@ class DocMeta(BaseModel):
     paragraph_count: int | None = None
     created_at: str | None = None
     extras: dict[str, object] = Field(default_factory=dict)
-
-    def stored_datasource(self) -> StoredDatasource:
-        """把 ingest 阶段 datasource 转持久化语义。
-
-        Returns:
-            ``StoredDatasource`` 枚举: ``file`` / ``manual`` / ``api``。
-
-        Note:
-            唯一允许的转换入口, pipeline 边界 + mapper 层统一调用。
-        """
-        return ingest_to_stored_datasource(self.datasource, self.source)
 
 
 class TextDoc(BaseModel):
@@ -84,6 +66,17 @@ class Chunk(BaseModel):
     metadata: ChunkMetadata = Field(default_factory=ChunkMetadata)
 
 
+class PersistOutcome(BaseModel):
+    """``IngestPipeline`` 落库阶段结果 (可选)。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    dataset_id: uuid.UUID
+    dataset_name: str
+    old_chunk_count: int
+    new_chunk_count: int
+
+
 class IngestResult(BaseModel):
     """Pipeline.ingest 的统一返回: chunks + 文档级元信息 + 降级信号。"""
 
@@ -93,3 +86,31 @@ class IngestResult(BaseModel):
     title: str | None = None
     doc_meta: DocMeta
     warnings: list[str] = Field(default_factory=list)
+    persist: PersistOutcome | None = None
+
+
+@dataclass
+class IngestOutcome:
+    """``ingest_many`` 批量结果。
+
+    Attributes:
+        items: 成功处理的 ``IngestResult`` 列表 (按输入顺序)。
+        warnings: 非致命的路径展开 / 跳过文件警告。
+        errors: 每个失败输入的 ``(label, exc)`` 列表, ``label`` 为文件路径。
+            空列表表示全部成功。
+    """
+
+    items: list[IngestResult]
+    warnings: list[str]
+    errors: list[tuple[str, BaseException]] = field(default_factory=list)
+
+
+class PersistConfig(BaseModel):
+    dataset_id: uuid.UUID | None = Field(default=None)
+    create_dataset: bool = Field(default=False)
+    dataset_name: str | None = Field(default=None)
+    enabled: bool = Field(default=False)
+
+    def adopt(self, dataset_id: uuid.UUID) -> None:
+        self.dataset_id = dataset_id
+        self.create_dataset = False
