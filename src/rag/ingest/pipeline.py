@@ -87,8 +87,8 @@ class IngestPipeline:
         max_concurrent: int = 8,
     ) -> None:
         """Args:
-            max_concurrent: 单批并发上限, 防止 1000 文件目录撑爆 PG pool + embedder。
-                默认 8 与 ``database.py:pool_size=10`` 留 2 余量。
+        max_concurrent: 单批并发上限, 防止 1000 文件目录撑爆 PG pool + embedder。
+            默认 8 与 ``database.py:pool_size=10`` 留 2 余量。
         """
         if max_concurrent < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
