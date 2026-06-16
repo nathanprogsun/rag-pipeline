@@ -35,10 +35,6 @@ from tests.integration._db_helpers import create_dataset, seed_chunks
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
-
-
-
 def _fake_llm(response_text: str = "answer [1](CITE) and [2](CITE)") -> MagicMock:
     """Mock LLM returning a fixed response with [id](CITE) markers."""
     llm = MagicMock()

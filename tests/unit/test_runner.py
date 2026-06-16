@@ -18,12 +18,12 @@ from unittest.mock import AsyncMock
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import SearchRequest, SearchResult
+from rag.eval._jsonl import load_jsonl
 from rag.eval.runner import (
     EvalRecord,
     EvalRunner,
     EvalSummary,
     _compute_metrics,
-    _load_jsonl,
 )
 
 # ---------- Helpers ----------
@@ -77,7 +77,7 @@ def test_load_jsonl_parses_records(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    records = _load_jsonl(f)
+    records = load_jsonl(f, EvalRecord)
     assert len(records) == 2
     assert records[0].query == "q1"
     assert records[0].k == 5
@@ -89,21 +89,21 @@ def test_load_jsonl_skips_empty_lines(tmp_path: Path) -> None:
         '{"query":"q1","dataset_ids":[],"ground_truth_chunk_ids":[],"k":10}\n\n',
         encoding="utf-8",
     )
-    records = _load_jsonl(f)
+    records = load_jsonl(f, EvalRecord)
     assert len(records) == 1
 
 
 def test_load_jsonl_skips_malformed(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text('{"query":"q1"}\nNOT VALID JSON\n{"query":"q2"}\n', encoding="utf-8")
-    records = _load_jsonl(f)
+    records = load_jsonl(f, EvalRecord)
     assert len(records) == 2
 
 
 def test_load_jsonl_empty_file(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
-    assert _load_jsonl(f) == []
+    assert load_jsonl(f, EvalRecord) == []
 
 
 # ---------- _compute_metrics ----------

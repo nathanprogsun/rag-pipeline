@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
@@ -37,14 +36,13 @@ def _unit_vector(dim_index: int) -> list[float]:
 
 
 _FAKE_EMB_VECTOR = _unit_vector(0)
-FakeEmbeddings = ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
+
+
+def _fake_embeddings() -> ConstantEmbeddings:
+    return ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 # ---------- Helpers ----------
-
-
-
-
 
 
 # ---------- Tests ----------
@@ -73,14 +71,14 @@ async def test_subgraph_fuses_vector_and_fulltext(
         chunks.append(chunk)
     await db_session.flush()
     for c in chunks:
-        await set_ts_tokens(db_session, c.id, ChineseTokenizer().build_tsvector(c.text))
+        await set_ts_tokens(db_session, c)
     await db_session.commit()
 
     vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
-        embed_model=FakeEmbeddings(),
+        embed_model=_fake_embeddings(),
     )
     fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -124,18 +122,14 @@ async def test_subgraph_vector_only_match(
     )
     db_session.add(chunk)
     await db_session.flush()
-    await set_ts_tokens(
-        db_session,
-        chunk.id,
-        ChineseTokenizer().build_tsvector("zzz unmatched text"),
-    )
+    await set_ts_tokens(db_session, chunk)
     await db_session.commit()
 
     vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
-        embed_model=FakeEmbeddings(),
+        embed_model=_fake_embeddings(),
     )
     fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -171,7 +165,7 @@ async def test_subgraph_empty_result_when_no_chunks(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
-        embed_model=FakeEmbeddings(),
+        embed_model=_fake_embeddings(),
     )
     fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -205,7 +199,7 @@ async def test_subgraph_raises_on_empty_query(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
-        embed_model=FakeEmbeddings(),
+        embed_model=_fake_embeddings(),
     )
     fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
@@ -236,12 +230,8 @@ async def test_subgraph_per_dataset_isolation(
     chunk_b = ChunkModel(dataset_id=ds_b, text="in B", embedding=_unit_vector(0))
     db_session.add(chunk_b)
     await db_session.flush()
-    await set_ts_tokens(
-        db_session, chunk_a.id, ChineseTokenizer().build_tsvector("in A")
-    )
-    await set_ts_tokens(
-        db_session, chunk_b.id, ChineseTokenizer().build_tsvector("in B")
-    )
+    await set_ts_tokens(db_session, chunk_a)
+    await set_ts_tokens(db_session, chunk_b)
     await db_session.commit()
 
     # Subgraph for dataset A only
@@ -249,7 +239,7 @@ async def test_subgraph_per_dataset_isolation(
         session_factory=pg_session_factory,
         dataset_id=ds_a,
         mode="vector",
-        embed_model=FakeEmbeddings(),
+        embed_model=_fake_embeddings(),
     )
     fulltext_retriever_a = RepoRetriever(
         session_factory=pg_session_factory,

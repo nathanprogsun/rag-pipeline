@@ -42,13 +42,13 @@ class ConstantEmbeddings(Embeddings):
         assert self._vector is not None, "ConstantEmbeddings: 须给 vector 或 factory"
         return [self._vector for _ in texts]
 
-    def embed_query(self, text: str) -> list[float]:  # type: ignore[override]
+    def embed_query(self, text: str) -> list[float]:
         if self._factory is not None:
             return self._factory(text)
         assert self._vector is not None
         return self._vector
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:  # type: ignore[override]
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if self._factory is not None:
             return [self._factory(t) for t in texts]
         assert self._vector is not None

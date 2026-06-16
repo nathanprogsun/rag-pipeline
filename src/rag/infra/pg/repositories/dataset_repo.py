@@ -143,9 +143,7 @@ class DatasetRepository:
                 DatasetModel.created_at,
                 func.coalesce(chunk_count_sq.c.n, 0).label("chunk_count"),
             )
-            .outerjoin(
-                chunk_count_sq, chunk_count_sq.c.dataset_id == DatasetModel.id
-            )
+            .outerjoin(chunk_count_sq, chunk_count_sq.c.dataset_id == DatasetModel.id)
             .order_by(DatasetModel.created_at.desc())
             .limit(limit)
             .offset(offset)

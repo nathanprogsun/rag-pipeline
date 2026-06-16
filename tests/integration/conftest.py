@@ -96,7 +96,6 @@ def _require_embedding_api_key() -> str:
     return raw
 
 
-
 @pytest.fixture(scope="session")
 def real_llm_chat_model() -> Runnable:
     """从 .env 读 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL，构造 ChatOpenAI。

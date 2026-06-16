@@ -10,19 +10,19 @@
 from __future__ import annotations
 
 import asyncio
-import socket
+import shutil
 import sys
 import urllib.parse
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
+import redis.asyncio as redis_async
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from rag.config import settings
 from rag.infra.llm.tokenizer import load_minimax_m3_tokenizer
-from rag.infra.pg.base import Base
 
 # ANSI 颜色 (终端不支持时自动降级)
 _USE_COLOR = sys.stdout.isatty()
@@ -59,7 +59,11 @@ class DoctorReport:
     def print(self) -> None:
         print(f"{_BOLD}=== rag.doctor ==={_RESET}")
         for r in self.results:
-            icon = {"pass": f"{_GREEN}✓{_RESET}", "warn": f"{_YELLOW}!{_RESET}", "fail": f"{_RED}✗{_RESET}"}[r.status]
+            icon = {
+                "pass": f"{_GREEN}✓{_RESET}",
+                "warn": f"{_YELLOW}!{_RESET}",
+                "fail": f"{_RED}✗{_RESET}",
+            }[r.status]
             line = f"  {icon} {r.name:<28}  {r.detail}"
             if r.hint:
                 line += f"\n      {r.hint}"
@@ -117,8 +121,6 @@ def check_python_version(report: DoctorReport) -> None:
 
 def check_uv(report: DoctorReport) -> None:
     """`uv` 命令可用性。"""
-    import shutil
-
     uv = shutil.which("uv")
     if uv:
         report.add("uv", "pass", f"位于 {uv}")
@@ -132,12 +134,21 @@ def check_database_url(report: DoctorReport) -> None:
     try:
         parsed = urllib.parse.urlparse(str(url))
         if not parsed.scheme.startswith("postgresql"):
-            report.add("DATABASE_URL", "fail", f"scheme={parsed.scheme!r}", "期望 postgresql+asyncpg://...")
+            report.add(
+                "DATABASE_URL",
+                "fail",
+                f"scheme={parsed.scheme!r}",
+                "期望 postgresql+asyncpg://...",
+            )
             return
         if not parsed.hostname:
             report.add("DATABASE_URL", "fail", "缺少 host", "")
             return
-        report.add("DATABASE_URL", "pass", f"{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}")
+        report.add(
+            "DATABASE_URL",
+            "pass",
+            f"{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}",
+        )
     except Exception as e:
         report.add("DATABASE_URL", "fail", f"解析失败: {e!r}", "")
 
@@ -148,9 +159,15 @@ def check_redis_url(report: DoctorReport) -> None:
     try:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "redis":
-            report.add("REDIS_URL", "fail", f"scheme={parsed.scheme!r}", "期望 redis://...")
+            report.add(
+                "REDIS_URL", "fail", f"scheme={parsed.scheme!r}", "期望 redis://..."
+            )
             return
-        report.add("REDIS_URL", "pass", f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}")
+        report.add(
+            "REDIS_URL",
+            "pass",
+            f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}",
+        )
     except Exception as e:
         report.add("REDIS_URL", "fail", f"解析失败: {e!r}", "")
 
@@ -168,7 +185,8 @@ async def _check_pg(report: DoctorReport) -> None:
             # 连通
             try:
                 version = (await conn.execute(text("SELECT version()"))).scalar()
-                report.add("pg connectivity", "pass", version.split(" on ")[0])
+                version_line = version.split(" on ")[0] if version else "unknown"
+                report.add("pg connectivity", "pass", version_line)
             except Exception as e:
                 report.add(
                     "pg connectivity",
@@ -183,7 +201,9 @@ async def _check_pg(report: DoctorReport) -> None:
             try:
                 rows = (
                     await conn.execute(
-                        text("SELECT extname FROM pg_extension WHERE extname IN ('vector', 'pgcrypto')")
+                        text(
+                            "SELECT extname FROM pg_extension WHERE extname IN ('vector', 'pgcrypto')"
+                        )
                     )
                 ).all()
                 installed = {row.extname for row in rows}
@@ -229,8 +249,6 @@ async def _check_pg(report: DoctorReport) -> None:
 
 async def check_redis(report: DoctorReport) -> None:
     """Redis PING。"""
-    import redis.asyncio as redis_async
-
     url = str(settings.redis_url)
     parsed = urllib.parse.urlparse(url)
     has_password = bool(parsed.password)
@@ -249,7 +267,11 @@ async def check_redis(report: DoctorReport) -> None:
     except Exception as e:
         err_name = type(e).__name__
         # 区分常见原因给针对性 hint
-        if err_name == "AuthenticationError" or "NOAUTH" in str(e) or "auth" in str(e).lower():
+        if (
+            err_name == "AuthenticationError"
+            or "NOAUTH" in str(e)
+            or "auth" in str(e).lower()
+        ):
             hint = (
                 "REDIS_URL 缺少密码 (或密码错)。两种修法:\n"
                 "      1) `make up` 启本项目自带的 redis (无鉴权)\n"
@@ -261,9 +283,7 @@ async def check_redis(report: DoctorReport) -> None:
                     "      修法: REDIS_URL 改为 `redis://:<password>@host:port/db` 或运行 `make up` 启本项目自带的 redis"
                 )
         elif "ConnectionError" in err_name or "refused" in str(e).lower():
-            hint = (
-                "排查: `docker compose ps` 确认容器在跑, 否则 `make up` 启本项目自带 redis"
-            )
+            hint = "排查: `docker compose ps` 确认容器在跑, 否则 `make up` 启本项目自带 redis"
         else:
             hint = f"未知错误, 详见: {type(e).__name__}: {e!r}"
         report.add("redis", "fail", f"{err_name}: {e!r}", hint)
@@ -275,9 +295,16 @@ def check_minimax_m3_tokenizer(report: DoctorReport) -> None:
     """项目专用的 MiniMax-M3 BPE tokenizer 能否加载。"""
     try:
         tok = load_minimax_m3_tokenizer()
-        report.add("minimax_m3 tokenizer", "pass", f"已加载, vocab={tok.get_vocab_size()}")
+        report.add(
+            "minimax_m3 tokenizer", "pass", f"已加载, vocab={tok.get_vocab_size()}"
+        )
     except Exception as e:
-        report.add("minimax_m3 tokenizer", "warn", f"加载失败: {type(e).__name__}: {e!r}", "首次使用会 lazy 下载")
+        report.add(
+            "minimax_m3 tokenizer",
+            "warn",
+            f"加载失败: {type(e).__name__}: {e!r}",
+            "首次使用会 lazy 下载",
+        )
 
 
 # ---------- 入口 ----------

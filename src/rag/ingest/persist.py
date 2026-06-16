@@ -19,15 +19,14 @@ from rag.config import settings
 from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.domain.enums import StoredDatasource
+from rag.error_codes import IngestErrorCode
+from rag.exception import RAGError
+from rag.infra.llm.embed import get_embed_model
+from rag.infra.pg.repositories.chunk_repo import ChunkRepository
+from rag.infra.pg.repositories.dataset_repo import DatasetRepository
 from rag.ingest.types import Chunk as IngestChunk
 from rag.ingest.types import ChunkMetadata as IngestChunkMetadata
 from rag.ingest.types import IngestResult
-from rag.infra.llm.embed import get_embed_model
-from rag.infra.pg.models.dataset import DatasetModel
-from rag.infra.pg.repositories.chunk_repo import ChunkRepository
-from rag.infra.pg.repositories.dataset_repo import DatasetRepository
-from rag.error_codes import IngestErrorCode
-from rag.exception import RAGError
 
 logger = logging.getLogger(__name__)
 

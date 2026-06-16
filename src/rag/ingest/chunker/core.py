@@ -36,9 +36,7 @@ _CODE_FENCE_RE = re.compile(r"```|~~~")
 _HTML_PRE_CODE_RE = re.compile(r"<pre\b[\s\S]*?<code\b", re.IGNORECASE)
 _TABLE_RE = re.compile(r"(?:^\|.+\|$\n?)+", re.MULTILINE)
 _HTML_TABLE_RE = re.compile(r"<table\b[\s\S]*?</table>", re.IGNORECASE)
-# Markdown 与 HTML 标题, 用于 per-chunk heading_stack 重算。
-_MD_HEADING_RE = re.compile(r"^(#{1,5})\s+(.+)$", re.MULTILINE)
-_HTML_HEADING_RE = re.compile(r"<h([1-6])>(.*?)</h\1>", re.IGNORECASE | re.DOTALL)
+# 标题正则已移至 `_heading_re.py`
 # Markdown 与 HTML 形式的图片引用。
 _IMAGE_REF_RE = re.compile(
     r"!\[[^\]]*\]\([^)]+\)|<img\b[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE
@@ -75,9 +73,6 @@ def _pre_split(text: str) -> list[str]:
 def _heading_stack_for_chunk(chunk_text: str) -> list[str]:
     """从 chunk 文本自身重建 heading 栈, 不依赖 doc-level 结构。
 
-    解析 chunk 内所有 heading (Markdown 与 HTML), 按出现顺序维护层级栈:
-    新的更深层级 push, 否则 pop 直至更浅。
-
     Args:
         chunk_text: 单个 chunk 的文本。
 
@@ -87,22 +82,9 @@ def _heading_stack_for_chunk(chunk_text: str) -> list[str]:
     if not chunk_text or not chunk_text.strip():
         return []
 
-    # 按 (offset, level, title) 收集 heading。
-    hits: list[tuple[int, int, str]] = []
-    for m in _MD_HEADING_RE.finditer(chunk_text):
-        level = len(m.group(1))
-        title = m.group(2).strip()
-        if title:
-            hits.append((m.start(), level, title))
-    for m in _HTML_HEADING_RE.finditer(chunk_text):
-        level = int(m.group(1))
-        title = re.sub(r"\s+", " ", m.group(2)).strip()
-        if title:
-            hits.append((m.start(), level, title))
+    from rag.ingest.chunker._heading_re import collect_headings  # noqa: PLC0415
 
-    hits.sort(key=lambda x: x[0])
-
-    # 维护层级栈。
+    hits = collect_headings(chunk_text)
     stack: list[tuple[int, str]] = []
     for _offset, level, title in hits:
         while stack and stack[-1][0] >= level:

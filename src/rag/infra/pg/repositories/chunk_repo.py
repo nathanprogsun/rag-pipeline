@@ -125,7 +125,7 @@ class ChunkRepository:
             )
             .values(deleted_at=func.now())
         )
-        return int(result.rowcount or 0)
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     async def bulk_insert(self, chunks: list[DomainChunk]) -> None:
         """批量写入 `DomainChunk` 列表。

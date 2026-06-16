@@ -21,7 +21,10 @@ def _unit_vector(dim_index: int) -> list[float]:
 
 
 _FAKE_EMB_VECTOR = _unit_vector(0)
-FakeEmbeddings = ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
+
+
+def _fake_embeddings() -> ConstantEmbeddings:
+    return ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 async def _create_dataset(db_session: AsyncSession) -> uuid.UUID:
@@ -56,7 +59,7 @@ async def test_hnsw_index_actually_used(db_session: AsyncSession) -> None:
         )
     await db_session.commit()
 
-    retriever = VectorRetriever(dataset_id=dataset_id, embed_model=FakeEmbeddings())
+    retriever = VectorRetriever(dataset_id=dataset_id, embed_model=_fake_embeddings())
     with patch(
         "rag.infra.pg.vector_store.AsyncSessionLocal",
         return_value=_session_context_manager(db_session),

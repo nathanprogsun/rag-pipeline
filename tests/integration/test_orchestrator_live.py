@@ -72,10 +72,6 @@ CORPUS_PYTHON: dict[str, list[str]] = {
 }
 
 
-
-
-
-
 async def _seed_corpus(
     db_session: AsyncSession,
     *,

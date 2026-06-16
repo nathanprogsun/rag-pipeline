@@ -69,6 +69,10 @@ async def seed_chunks(
     texts: list[str],
     embed_model: Embeddings,
     fill_tsvector: bool = True,
+    parent_titles: list[str] | None = None,
+    chunk_indices: list[int] | None = None,
+    modalities: list[str] | None = None,
+    image_paths: list[str | None] | None = None,
 ) -> list[ChunkModel]:
     """真实 embedding + 可选 tsvector 填充, 批量入库 chunk。
 
@@ -79,14 +83,31 @@ async def seed_chunks(
         embed_model: 用于 ``aembed_documents`` 的 LangChain Embeddings。
         fill_tsvector: True 时额外用 ChineseTokenizer 填充 ``ts_tokens`` 列
             (供 fulltext 检索); 测试纯向量语义时关掉可省 IO。
+        parent_titles: 与 ``texts`` 等长的 ``parent_title`` 列表。
+        chunk_indices: 与 ``texts`` 等长的 ``chunk_index`` 列表。
+        modalities: 与 ``texts`` 等长的 modality 列表。
+        image_paths: 与 ``texts`` 等长的 ``image_path`` 列表。
 
     Returns:
         新建的 ``ChunkModel`` 列表 (含分配 id 与 embedding)。
     """
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
+    n = len(texts)
+    titles = parent_titles if parent_titles is not None else [""] * n
+    indices = chunk_indices if chunk_indices is not None else [0] * n
+    modality_list = modalities if modalities is not None else ["text"] * n
+    image_path_list = image_paths if image_paths is not None else [None] * n
     chunks: list[ChunkModel] = []
-    for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
+    for i, (content, emb) in enumerate(zip(texts, embeddings, strict=True)):
+        chunk = ChunkModel(
+            dataset_id=dataset_id,
+            text=content,
+            embedding=emb,
+            parent_title=titles[i],
+            chunk_index=indices[i],
+            modality=modality_list[i],
+            image_path=image_path_list[i],
+        )
         db_session.add(chunk)
         chunks.append(chunk)
     await db_session.flush()
@@ -95,6 +116,33 @@ async def seed_chunks(
             await set_ts_tokens(db_session, chunk)
     await db_session.commit()
     return chunks
+
+
+async def seed_chunk(
+    db_session: AsyncSession,
+    *,
+    dataset_id: uuid.UUID,
+    chunk_text: str,
+    embed_model: Embeddings,
+    parent_title: str = "",
+    chunk_index: int = 0,
+    modality: str = "text",
+    image_path: str | None = None,
+    fill_tsvector: bool = True,
+) -> ChunkModel:
+    """单条 chunk 入库 (``seed_chunks`` 的便捷包装)。"""
+    chunks = await seed_chunks(
+        db_session,
+        dataset_id=dataset_id,
+        texts=[chunk_text],
+        embed_model=embed_model,
+        fill_tsvector=fill_tsvector,
+        parent_titles=[parent_title],
+        chunk_indices=[chunk_index],
+        modalities=[modality],
+        image_paths=[image_path],
+    )
+    return chunks[0]
 
 
 async def set_ts_tokens(db_session: AsyncSession, chunk: ChunkModel) -> None:
@@ -110,7 +158,10 @@ async def set_ts_tokens(db_session: AsyncSession, chunk: ChunkModel) -> None:
 
 
 class _FakeAIMessage:
-    """``_fake_llm`` 返回的最小可调用对象, 模拟 LangChain ``AIMessage.content``。"""
+    """``fake_llm`` 返回的最小可调用对象, 模拟 LangChain ``AIMessage.content``。"""
+
+    def __init__(self, content: str) -> None:
+        self.content = content
 
 
 def fake_llm(default_response: str = "") -> object:

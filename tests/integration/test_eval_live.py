@@ -35,10 +35,6 @@ from tests.integration._db_helpers import create_dataset, seed_chunks
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
-
-
-
 def _fake_llm() -> MagicMock:
     """Mock LLM: eval 不关心 LLM 质量, 返回空字符串。"""
     llm = MagicMock()

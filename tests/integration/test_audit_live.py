@@ -40,10 +40,6 @@ from tests.integration._retriever import make_subgraph
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
-
-
-
 @pytest.mark.asyncio
 async def test_real_audit_records_orchestrator_run(
     db_session: AsyncSession,

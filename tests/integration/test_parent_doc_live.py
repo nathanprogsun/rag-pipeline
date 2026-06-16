@@ -31,6 +31,7 @@ from rag.search.post.cite import SimpleCite
 from rag.search.post.parent_doc import NoOpParentDoc, ParentDocExpander
 from tests.integration._db_helpers import (
     create_dataset,
+    seed_chunk,
     seed_chunks,
 )
 from tests.integration._retriever import make_subgraph
@@ -38,10 +39,6 @@ from tests.integration._retriever import make_subgraph
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-
-
 
 
 def _make_scored(chunk: ChunkModel, *, score: float = 0.5) -> ScoredDocument:
@@ -83,17 +80,14 @@ async def test_real_parent_doc_expand_to_window(
     """
     ds = await create_dataset(db_session, "parent-expand")
     parent = "python-tutorial"
-    chunks: list[ChunkModel] = []
-    for idx in range(5):
-        chunk = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"Python 列表推导式 章节 {idx}",
-            parent_title=parent,
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        chunks.append(chunk)
+    chunks = await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"Python 列表推导式 章节 {idx}" for idx in range(5)],
+        embed_model=live_embed_model,
+        parent_titles=[parent] * 5,
+        chunk_indices=list(range(5)),
+    )
 
     matched = chunks[2]  # 命中 chunk_index=2
 
@@ -125,17 +119,14 @@ async def test_real_parent_doc_siblings_get_decay(
     """真实场景 2: siblings = matched_score * 0.5 (decay=0.5 default)。"""
     ds = await create_dataset(db_session, "parent-decay")
     parent = "doc"
-    chunks: list[ChunkModel] = []
-    for idx in range(5):
-        chunk = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"section {idx}",
-            parent_title=parent,
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        chunks.append(chunk)
+    chunks = await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"section {idx}" for idx in range(5)],
+        embed_model=live_embed_model,
+        parent_titles=[parent] * 5,
+        chunk_indices=list(range(5)),
+    )
     matched = chunks[2]
 
     async with pg_session_factory() as session:
@@ -166,17 +157,14 @@ async def test_real_parent_doc_window_zero_noop(
 ) -> None:
     """真实场景 3: req.context.parent_doc_window=0 → 不扩展, 原样返回。"""
     ds = await create_dataset(db_session, "parent-noop")
-    chunks = []
-    for idx in range(3):
-        c = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"text {idx}",
-            parent_title="doc",
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        chunks.append(c)
+    chunks = await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"text {idx}" for idx in range(3)],
+        embed_model=live_embed_model,
+        parent_titles=["doc"] * 3,
+        chunk_indices=list(range(3)),
+    )
 
     async with pg_session_factory() as session:
         repo = ChunkRepository(session)
@@ -203,7 +191,7 @@ async def test_real_parent_doc_image_caption_bypass(
     """真实场景 4: image_caption modality 不进 parent 扩展, 原样保留。"""
     ds = await create_dataset(db_session, "parent-img-bypass")
     # 1 image chunk + 3 text chunks 同 parent_title
-    img = await seed_chunks(
+    img = await seed_chunk(
         db_session,
         dataset_id=ds,
         chunk_text="(image caption) Python 代码截图",
@@ -213,17 +201,14 @@ async def test_real_parent_doc_image_caption_bypass(
         modality="image_caption",
         image_path="/img/python.png",
     )
-    text_chunks = []
-    for idx in range(1, 4):
-        c = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"Python section {idx}",
-            parent_title="doc",
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        text_chunks.append(c)
+    await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"Python section {idx}" for idx in range(1, 4)],
+        embed_model=live_embed_model,
+        parent_titles=["doc"] * 3,
+        chunk_indices=list(range(1, 4)),
+    )
 
     async with pg_session_factory() as session:
         repo = ChunkRepository(session)
@@ -252,17 +237,14 @@ async def test_real_parent_doc_overlapping_windows_dedup(
     A 的窗口 [0,4] = B 的窗口 [1,5], 重叠 [1,4]。siblings 不应重复。
     """
     ds = await create_dataset(db_session, "parent-overlap")
-    chunks = []
-    for idx in range(6):
-        c = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"section {idx}",
-            parent_title="doc",
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        chunks.append(c)
+    chunks = await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"section {idx}" for idx in range(6)],
+        embed_model=live_embed_model,
+        parent_titles=["doc"] * 6,
+        chunk_indices=list(range(6)),
+    )
 
     async with pg_session_factory() as session:
         repo = ChunkRepository(session)
@@ -306,17 +288,14 @@ async def test_real_orchestrator_with_parent_doc_full_chain(
     """
     ds = await create_dataset(db_session, "parent-fullchain")
     parent = "python-doc"
-    chunks = []
-    for idx in range(4):
-        c = await seed_chunks(
-            db_session,
-            dataset_id=ds,
-            chunk_text=f"Python 列表推导式 章节 {idx}",
-            parent_title=parent,
-            chunk_index=idx,
-            embed_model=live_embed_model,
-        )
-        chunks.append(c)
+    await seed_chunks(
+        db_session,
+        dataset_id=ds,
+        texts=[f"Python 列表推导式 章节 {idx}" for idx in range(4)],
+        embed_model=live_embed_model,
+        parent_titles=[parent] * 4,
+        chunk_indices=list(range(4)),
+    )
 
     subgraphs = {
         ds: make_subgraph(

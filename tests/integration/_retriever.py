@@ -131,13 +131,13 @@ def make_subgraph(
     """
     return SearchSubgraph(
         dataset_id=dataset_id,
-        vector_retriever=RepoRetriever(  # type: ignore[arg-type]
+        vector_retriever=RepoRetriever(
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="vector",
             embed_model=embed_model,
         ),
-        fulltext_retriever=RepoRetriever(  # type: ignore[arg-type]
+        fulltext_retriever=RepoRetriever(
             session_factory=session_factory,
             dataset_id=dataset_id,
             mode="fulltext",

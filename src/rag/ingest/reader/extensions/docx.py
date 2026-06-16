@@ -18,6 +18,7 @@ from rag.ingest.reader.types import (
     FormatReaderResult,
     UploadedFileResult,
     UploadFileHandler,
+    mime_to_extension,
 )
 from rag.ingest.types import DocMeta
 
@@ -32,21 +33,9 @@ _MISSING_UPLOAD_HANDLER_MSG = (
 
 _PARSE_ERROR_MSG = "Can not read doc file, please convert to PDF"
 
-# mime → 文件后缀映射, 独立维护避免跨模块私有依赖
-_MIME_TO_EXT: dict[str, str] = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "image/bmp": "bmp",
-}
-
 
 def _resolve_mime_extension(mime: str) -> str:
-    """根据 mime 返回对应后缀, 无匹配时默认 ``"bin"``。"""
-    return _MIME_TO_EXT.get(mime.lower(), "bin")
+    return mime_to_extension(mime)
 
 
 async def docx_adapter(

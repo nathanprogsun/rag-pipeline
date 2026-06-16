@@ -37,7 +37,6 @@ from tests.integration._retriever import make_subgraph
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
 @pytest.fixture(scope="session")
 def live_rerank_model() -> QwenRerank:
     """真实 qwen3-rerank 客户端。缺 OPENAI_RERANK_API_KEY 时 skip。"""
@@ -183,10 +182,6 @@ async def test_real_rerank_weight_zero_preserves_text_ranking(
 # ─────────────────────────────────────────────────────────────────────────────
 # Real orchestrator + real rerank integration
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-
-
 
 
 @pytest.mark.asyncio

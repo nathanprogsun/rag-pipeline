@@ -42,10 +42,6 @@ from tests.integration._retriever import make_subgraph
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-
-
-
-
 @pytest.mark.asyncio
 async def test_real_cite_through_orchestrator(
     db_session: AsyncSession,
