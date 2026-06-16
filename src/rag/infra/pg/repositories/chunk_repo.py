@@ -46,7 +46,10 @@ class ChunkRepository:
                 ChunkModel,
                 (1 - ChunkModel.embedding.cosine_distance(query_vec)).label("score"),
             )
-            .where(ChunkModel.dataset_id == dataset_id)
+            .where(
+                ChunkModel.dataset_id == dataset_id,
+                ChunkModel.deleted_at.is_(None),  # 防御性: HNSW 候选可能在软删节点上
+            )
             .order_by(ChunkModel.embedding.cosine_distance(query_vec))
             .limit(top_k)
         )
@@ -82,6 +85,7 @@ class ChunkRepository:
             .where(
                 ChunkModel.dataset_id == dataset_id,
                 ChunkModel.ts_tokens.op("@@")(ts_query_expr),
+                ChunkModel.deleted_at.is_(None),  # 防御性
             )
             .order_by(func.ts_rank(ChunkModel.ts_tokens, ts_query_expr).desc())
             .limit(top_k)
@@ -93,7 +97,10 @@ class ChunkRepository:
         return list(zip(chunk_model_list_to_domain(models), scores, strict=True))
 
     async def delete_by_filename(self, dataset_id: uuid.UUID, filename: str) -> None:
-        """按文件名软删除（写入 `deleted_at`）。"""
+        """按文件名软删除（写入 `deleted_at`）。
+
+        注: 该方法为 T2 之前的 legacy 接口, 新代码应使用 ``soft_delete_by_document``。
+        """
         await self.session.execute(
             update(ChunkModel)
             .where(
@@ -106,20 +113,15 @@ class ChunkRepository:
             .values(deleted_at=func.now())
         )
 
-    async def soft_delete_by_filename(
-        self, dataset_id: uuid.UUID, filename: str
+    async def soft_delete_by_document(
+        self, document_id: uuid.UUID
     ) -> int:
-        """按文件名软删除, 返回受影响行数。
-
-        与 `delete_by_filename` 行为一致, 区别是显式返回受影响行数, 供
-        PersistStage 决定是否需要新插入。
-        """
+        """按 document_id 软删, 返回受影响行数。"""
         result = await self.session.execute(
             update(ChunkModel)
             .where(
                 and_(
-                    ChunkModel.dataset_id == dataset_id,
-                    ChunkModel.filename == filename,
+                    ChunkModel.document_id == document_id,
                     ChunkModel.deleted_at.is_(None),
                 )
             )

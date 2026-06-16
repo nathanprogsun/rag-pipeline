@@ -45,6 +45,7 @@ async def test_chunk_repository_roundtrip(db_session: AsyncSession) -> None:
 
     c = ChunkModel(
         dataset_id=ds.id,
+        document_id=uuid.uuid4(),
         text="test content",
         embedding=[0.0] * 1535 + [1.0],
     )
@@ -67,6 +68,7 @@ async def test_soft_delete_excludes_rows(db_session: AsyncSession) -> None:
 
     c = ChunkModel(
         dataset_id=ds.id,
+        document_id=uuid.uuid4(),
         text="to delete",
         filename="doc.pdf",
         embedding=[0.0] * 1535 + [1.0],

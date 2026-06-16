@@ -1,10 +1,10 @@
 """PersistStage: 把 `IngestResult` 写到 PG。
 
-串联: 解析 dataset (id 或新建) -> 批量 embedding -> 同 (dataset, filename) 旧 chunk
-软删 -> 批量 insert 新 chunk。整段在单 PG 事务内执行, 任何异常触发 rollback。
+串联: 解析 dataset (id 或新建) -> 批量 embedding -> 按 document_id 软删旧 chunk
+-> 批量 insert 新 chunk。整段在单 PG 事务内执行, 任何异常触发 rollback。
 
-幂等策略: 同 (dataset_id, filename) 先软删再 insert。重复 ingest 同一文件
-得到更新后的 chunk 集合, 不会产生重复。
+幂等策略: 同 document_id 先软删再 insert。重复 ingest 同一文件得到更新后的
+chunk 集合, 不会产生重复。
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from rag.exception import RAGError
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.infra.pg.repositories.dataset_repo import DatasetRepository
+from rag.infra.pg.repositories.document_repo import DocumentRepository
 from rag.ingest.types import Chunk as IngestChunk
 from rag.ingest.types import ChunkMetadata as IngestChunkMetadata
 from rag.ingest.types import IngestResult
@@ -129,21 +130,35 @@ async def persist(
 
     # 3. 构造 domain.document.Chunk (file ingest 落库语义固定为 file)
     filename = result.doc_meta.filename
+    chunk_repo = ChunkRepository(session)
+    document_repo = DocumentRepository(session)
+
+    # 3a. upsert documents 行, 拿到 document_id
+    document_id: uuid.UUID | None = None
+    if filename:
+        doc = await document_repo.upsert(
+            dataset_id=ds.id,
+            filename=filename,
+            modality="text",
+            total_chunks=len(chunks),
+        )
+        document_id = doc.id
+
     domain_chunks: list[DomainChunk] = [
         _build_domain_chunk(
             c,
             dataset_id=ds.id,
+            document_id=document_id or uuid.uuid4(),
             embedding=emb,
             filename=filename,
         )
         for c, emb in zip(chunks, embeddings, strict=True)
     ]
 
-    # 4. 同 (dataset_id, filename) 软删旧 chunk
-    chunk_repo = ChunkRepository(session)
+    # 4. 按 document_id 软删旧 chunk
     old_count = 0
-    if filename:
-        old_count = await chunk_repo.soft_delete_by_filename(ds.id, filename)
+    if document_id is not None:
+        old_count = await chunk_repo.soft_delete_by_document(document_id)
 
     # 5. 批量 insert 新 chunk
     await chunk_repo.bulk_insert(domain_chunks)
@@ -168,6 +183,7 @@ def _build_domain_chunk(
     ingest_chunk: IngestChunk,
     *,
     dataset_id: uuid.UUID,
+    document_id: uuid.UUID,
     embedding: list[float],
     filename: str | None,
 ) -> DomainChunk:
@@ -178,6 +194,7 @@ def _build_domain_chunk(
     return DomainChunk(
         id=ingest_chunk.id,
         dataset_id=dataset_id,
+        document_id=document_id,
         text=ingest_chunk.text,
         modality="text",
         image_path=None,

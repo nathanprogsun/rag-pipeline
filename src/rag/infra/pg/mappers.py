@@ -8,6 +8,7 @@ retriever / repository 直接调 mapper, 不再散落隐式映射。
   ───────────                    ─────────────────────────────────
   ``id``                         ``Chunk.id``
   ``dataset_id``                 ``Chunk.dataset_id``
+  ``document_id``                ``Chunk.document_id``
   ``text``                       ``Chunk.text``
   ``embedding``                  ``Chunk.embedding``
   ``modality``                   ``Chunk.modality``
@@ -27,6 +28,7 @@ from typing import Literal, cast
 from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.infra.pg.models.chunk import ChunkModel
+from rag.infra.pg.models.document import DocumentModel  # noqa: F401  # 注册到 Base.metadata
 
 
 def chunk_model_to_domain(model: ChunkModel) -> DomainChunk:
@@ -43,6 +45,7 @@ def chunk_model_to_domain(model: ChunkModel) -> DomainChunk:
     return DomainChunk(
         id=model.id,
         dataset_id=model.dataset_id,
+        document_id=model.document_id,
         text=model.text,
         modality=cast(Literal["text", "image_caption"], model.modality),
         image_path=model.image_path,
@@ -65,6 +68,7 @@ def domain_chunk_to_model(chunk: DomainChunk) -> ChunkModel:
     return ChunkModel(
         id=chunk.id,
         dataset_id=chunk.dataset_id,
+        document_id=chunk.document_id,
         text=chunk.text,
         modality=chunk.modality,
         image_path=chunk.image_path,

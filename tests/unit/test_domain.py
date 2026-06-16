@@ -26,7 +26,11 @@ def test_dataset_creation() -> None:
 def test_chunk_requires_dataset_id() -> None:
     meta = ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
     chunk = Chunk(
-        id=uuid.uuid4(), dataset_id=meta.dataset_id, text="hello", metadata=meta
+        id=uuid.uuid4(),
+        dataset_id=meta.dataset_id,
+        document_id=uuid.uuid4(),
+        text="hello",
+        metadata=meta,
     )
     assert chunk.modality == "text"  # default
     assert chunk.image_path is None

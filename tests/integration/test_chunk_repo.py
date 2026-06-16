@@ -48,6 +48,7 @@ class TestChunkRepository:
         db_session.add(
             ChunkModel(
                 dataset_id=dataset_id,
+                document_id=uuid.uuid4(),
                 text="vector hit",
                 embedding=_embedding(1.0),
             )
@@ -69,11 +70,13 @@ class TestChunkRepository:
         dataset_id = await _create_dataset(db_session)
         match = ChunkModel(
             dataset_id=dataset_id,
+            document_id=uuid.uuid4(),
             text="postgresql vector fulltext",
             embedding=_embedding(),
         )
         miss = ChunkModel(
             dataset_id=dataset_id,
+            document_id=uuid.uuid4(),
             text="unrelated content only",
             embedding=_embedding(0.5),
         )
@@ -93,10 +96,12 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
+        document_id = uuid.uuid4()
         chunks = [
             DomainChunk(
                 id=uuid.uuid4(),
                 dataset_id=dataset_id,
+                document_id=document_id,
                 text=f"chunk-{i}",
                 modality="text",
                 metadata=DomainChunkMetadata(
@@ -123,6 +128,7 @@ class TestChunkRepository:
             db_session.add(
                 ChunkModel(
                     dataset_id=dataset_id,
+                    document_id=uuid.uuid4(),
                     text=f"sibling-{i}",
                     parent_title=parent,
                     chunk_index=i,
@@ -143,6 +149,7 @@ class TestChunkRepository:
         db_session.add(
             ChunkModel(
                 dataset_id=dataset_id,
+                document_id=uuid.uuid4(),
                 text="soft delete me",
                 filename="report.pdf",
                 embedding=_embedding(),

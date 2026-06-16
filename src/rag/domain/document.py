@@ -1,22 +1,21 @@
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from rag.domain.enums import StoredDatasource
-
 
 class ChunkMetadata(BaseModel):
     """Chunk 元数据: 定位与溯源信息。
 
-    `datasource` 取 `StoredDatasource` 而非 `IngestDatasource`: 这是落库语义
-    (`file` / `manual` / `api`), ingest 阶段的 `url` 已通过
-    `ingest_to_stored_datasource` 在 pipeline 边界映射。
+    ``datasource`` 固定为 ``"file"``: 当前只有 file ingest 路径。
+    PG schema 不持久化此字段, mapper 读路径取默认。
     """
 
     dataset_id: uuid.UUID
-    datasource: StoredDatasource
+    datasource: Literal["file"] = "file"
     filename: str | None = None
     parent_title: str = ""
     chunk_index: int = 0
@@ -30,6 +29,7 @@ class Chunk(BaseModel):
     Args:
         id: chunk 唯一标识。
         dataset_id: 所属 dataset 的 UUID。
+        document_id: 所属 document 的 UUID (T2 起为必填, 取代 filename 维度的归属)。
         text: 块文本内容。
         modality: 模态, `text` 或图片描述 `image_caption`。
         image_path: 当 `modality=image_caption` 时有值, 指向图片。
@@ -39,6 +39,7 @@ class Chunk(BaseModel):
 
     id: uuid.UUID
     dataset_id: uuid.UUID
+    document_id: uuid.UUID
     text: str
     modality: Literal["text", "image_caption"] = "text"
     image_path: str | None = None
