@@ -31,9 +31,15 @@ from rag.ingest.types import IngestResult
 
 logger = logging.getLogger(__name__)
 
+PERSIST_INSERT_FAILED: str = "PERSIST_INSERT_FAILED"
+
 
 def _hash_chunks(chunks: list[IngestChunk]) -> bytes:
     """对 chunk text 列表做 SHA-256, 用于 document 级 dedup。
+
+    顺序敏感: 同一组 chunks 重排顺序会产生不同 digest。
+    这是有意的 — chunk 顺序代表实际生成顺序, 重排视为内容变更。
+    (如果需要顺序无关去重, 在调用方 sort 之后再 hash。)
 
     Returns:
         32-byte SHA-256 digest.
@@ -176,15 +182,16 @@ async def persist(
         old_count = await chunk_repo.soft_delete_by_document(document_id)
 
     # 5. 批量 insert 新 chunk; 失败时把 document 标为 failed
-    # 注: bulk_insert 抛异常时, 整体事务会回滚, 这里写的 mark_status("failed")
-    # 也会被一起回滚 —— 真正的 durable 失败状态需要后续用独立 session 提交。
-    # 现阶段这个 mark 仅在同事务内作为调试信号, 用于事务窗口内排查。
+    # 注意: 此处的 mark_status("failed") 与 bulk_insert 在同一事务。
+    # 异常向上抛后, 调用方的事务会回滚, "failed" 状态不会持久化。
+    # 真正的可观察失败状态需要独立事务或调用方显式记录 — 见后续 PR。
+    # 当前实现的目的是在事务窗口内给日志/审计一个标记, 而非持久化失败记录。
     try:
         await chunk_repo.bulk_insert(domain_chunks)
     except Exception:
         if document_id is not None:
             await document_repo.mark_status(
-                document_id, "failed", error_code="PERSIST_INSERT_FAILED"
+                document_id, "failed", error_code=PERSIST_INSERT_FAILED
             )
         raise
 
