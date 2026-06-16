@@ -83,21 +83,15 @@ def test_split_returns_chunk_objects() -> None:
     chunks = Chunker(s).split(text)
     assert all(hasattr(c, "text") and hasattr(c, "metadata") for c in chunks)
     assert all(c.metadata.chunk_index == i for i, c in enumerate(chunks))
-    assert all(c.metadata.total_chunks == len(chunks) for c in chunks)
     assert all(c.text.strip() for c in chunks)
 
 
-def test_split_injects_chunk_context() -> None:
-    """split() 接受 ChunkContext, 注入 source / file_type / encoding。"""
-    from rag.ingest.chunker.types import ChunkContext
-
+def test_split_injects_doc_meta() -> None:
+    """split() 不再吃 DocMeta; heading_stack 仅按 chunk 文本现场重建。"""
     s = ChunkSettings(chunk_size=50, max_chunk_size=200, min_chunk_size=10)
-    ctx = ChunkContext(source="file:///x.md", file_type="md", encoding="utf-8")
-    chunks = Chunker(s).split("段落一。\n\n段落二。", ctx=ctx)
+    chunks = Chunker(s).split("段落一。\n\n段落二。")
     for c in chunks:
-        assert c.metadata.source == "file:///x.md"
-        assert c.metadata.file_type == "md"
-        assert c.metadata.encoding == "utf-8"
+        assert isinstance(c.metadata.heading_stack, list)
 
 
 def test_split_empty_returns_empty_list() -> None:

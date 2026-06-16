@@ -22,12 +22,11 @@ def test_pipeline_docx_via_file_source(sample_docx: Path) -> None:
     assert result.doc_meta.mime == (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-    assert result.doc_meta.size_bytes > 0
-    for c in result.chunks:
-        assert c.metadata.file_type == "docx"
-        assert c.metadata.encoding == "utf-8"
-        assert c.metadata.source == "sample.docx"
-        assert c.metadata.page_count is None
+    # heading_stack 是 per-chunk 现场重建, sample.docx 含 H1/H2, 故非空
+    assert any(
+        any("Sample DOCX Document" in h for h in c.metadata.heading_stack)
+        for c in result.chunks
+    )
 
 
 def test_pipeline_docx_chunk_metadata_has_no_heading(sample_docx: Path) -> None:
@@ -40,15 +39,9 @@ def test_pipeline_docx_chunk_metadata_has_no_heading(sample_docx: Path) -> None:
 
     assert result.chunks
     for c in result.chunks:
-        assert c.metadata.file_type == "docx"
-        assert c.metadata.encoding == "utf-8"
-        assert c.metadata.source == "sample.docx"
         assert isinstance(c.metadata.heading_stack, list)
-        assert c.metadata.has_code is False
-        assert c.metadata.has_table is False
     for i, c in enumerate(result.chunks):
         assert c.metadata.chunk_index == i
-        assert c.metadata.total_chunks == len(result.chunks)
     full = "\n".join(c.text for c in result.chunks)
     assert "sample docx" in full.lower() or "DOCX" in full
 

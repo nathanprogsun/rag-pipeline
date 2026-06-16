@@ -31,7 +31,7 @@ import pytest
 from rag.error_codes import ReaderErrorCode
 from rag.exception import RAGError
 from rag.ingest.reader.extensions.docx import DOCX_MIME, docx_adapter
-from rag.ingest.reader.raw_text import UploadedFileResult
+from rag.ingest.reader.types import UploadedFileResult
 
 # tests/data/sample.docx 路径 (与 conftest.py 的 SAMPLE_DOCX 一致)
 SAMPLE_DOCX = Path(__file__).resolve().parents[2] / "data" / "sample.docx"
@@ -95,9 +95,6 @@ async def test_docx_extension_adapter_minimal() -> None:
     assert "测试 python-docx reader" in result.raw_text
     # meta 完整
     assert result.meta.mime == DOCX_MIME
-    assert result.meta.encoding == "utf-8"
-    assert result.meta.size_bytes == len(buf)
-    assert result.meta.datasource == "file"
     # 没图, images 必空
     assert result.images == []
     # docx 适配器只返 raw_text, 不返 format_text

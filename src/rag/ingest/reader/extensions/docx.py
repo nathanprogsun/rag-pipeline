@@ -143,17 +143,10 @@ async def docx_adapter(
     # 此时 html 已含上传后的 key, 传 upload_file=None 避免 html2md 二次处理 base64
     markdown = await html_to_md(html, upload_file=None)
 
-    paragraph_count = sum(1 for line in markdown.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=markdown,
         format_text=None,
-        meta=DocMeta(
-            mime=DOCX_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-            paragraph_count=paragraph_count,
-        ),
+        meta=DocMeta(mime=DOCX_MIME),
         images=list(images),
         extras={},
     )

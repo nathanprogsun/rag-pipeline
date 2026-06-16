@@ -31,7 +31,7 @@ async def text_adapter(
         ``FormatReaderResult``:
         - ``raw_text``: 解码后的文本。
         - ``format_text=None``, ``images=[]``。
-        - ``meta``: ``mime='text/plain'`` + ``encoding`` + ``size_bytes``。
+        - ``meta``: ``mime='text/plain'``。
 
     Raises:
         RAGError: 编码异常 → ``code=READER_ENCODING``;
@@ -51,9 +51,5 @@ async def text_adapter(
         raw_text=raw_text,
         format_text=None,
         images=[],
-        meta=DocMeta(
-            mime=TEXT_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-        ),
+        meta=DocMeta(mime=TEXT_MIME),
     )

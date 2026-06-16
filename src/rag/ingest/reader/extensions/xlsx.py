@@ -143,11 +143,7 @@ async def xlsx_adapter(
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=format_text,
-        meta=DocMeta(
-            mime=XLSX_MIME,
-            encoding="utf-8",  # 二进制容器, encoding 概念不适用; 占位 utf-8
-            size_bytes=len(buffer),
-        ),
+        meta=DocMeta(mime=XLSX_MIME),
         images=[],
         extras={},
     )

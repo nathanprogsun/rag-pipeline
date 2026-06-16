@@ -111,11 +111,7 @@ async def csv_adapter(
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=format_text,
-        meta=DocMeta(
-            mime=CSV_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-        ),
+        meta=DocMeta(mime=CSV_MIME),
         images=[],
         extras={"row_count": row_count},
     )

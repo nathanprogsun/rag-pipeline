@@ -20,15 +20,8 @@ def test_pipeline_csv_via_file_source(sample_csv: Path) -> None:
     assert result.chunks
     assert result.doc_meta.filename == "sample.csv"
     assert result.doc_meta.mime == "text/csv"
-    assert result.doc_meta.size_bytes > 0
     for c in result.chunks:
-        assert c.metadata.file_type == "csv"
-        assert c.metadata.encoding == "utf-8"
-        assert c.metadata.source == "sample.csv"
         assert c.metadata.heading_stack == []
-        assert c.metadata.has_code is False
-        assert c.metadata.has_table is False
-        assert c.metadata.page_count is None
 
 
 def test_pipeline_csv_with_large_rows(tmp_path: Path) -> None:
@@ -47,7 +40,6 @@ def test_pipeline_csv_with_large_rows(tmp_path: Path) -> None:
     result = run_ingest(pipeline, str(p))
 
     assert len(result.chunks) >= 1
-    assert result.doc_meta.size_bytes == len(big)
     assert result.doc_meta.filename == "big.csv"
 
 
@@ -60,5 +52,6 @@ def test_pipeline_csv_single_row(tmp_path: Path) -> None:
 
     assert result.chunks
     assert result.doc_meta.filename == "header_only.csv"
-    full = "\n".join(c.raw_text for c in result.chunks)
-    assert "a,b,c" in full
+    # get_format_text=True → Chunk.text 取 format_text (markdown 表格)
+    full = "\n".join(c.text for c in result.chunks)
+    assert "| a | b | c |" in full

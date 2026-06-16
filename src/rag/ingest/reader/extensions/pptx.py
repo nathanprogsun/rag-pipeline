@@ -38,17 +38,10 @@ async def pptx_adapter(
         # 用 wrap_parse_error 统一替换 parser 后缀
         raise wrap_parse_error("<buffer:pptx>", e, "python-zipfile") from e
 
-    paragraph_count = sum(1 for line in raw_text.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=None,
-        meta=DocMeta(
-            mime=PPTX_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-            paragraph_count=paragraph_count,
-        ),
+        meta=DocMeta(mime=PPTX_MIME),
         images=[],
         extras={},
     )

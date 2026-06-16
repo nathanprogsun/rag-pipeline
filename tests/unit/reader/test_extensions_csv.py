@@ -31,8 +31,6 @@ async def test_csv_basic() -> None:
     assert "Beijing" in result.raw_text
     assert result.meta.mime == CSV_MIME
     assert result.meta.mime == "text/csv"
-    assert result.meta.encoding == "utf-8"
-    assert result.meta.size_bytes == len(buf)
     assert result.format_text is not None
     assert result.images == []
     # 3 列, header + 2 数据行
@@ -103,7 +101,6 @@ async def test_csv_empty() -> None:
     # 无 header, format_text 应为 None
     assert result.format_text is None
     assert result.meta.mime == "text/csv"
-    assert result.meta.size_bytes == 0
     # 空字符串 split('\n') 后没有非空行, row_count = 0
     assert result.extras["row_count"] == 0
 

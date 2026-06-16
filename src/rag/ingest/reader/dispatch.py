@@ -57,7 +57,7 @@ async def dispatch_bytes(
 
     Returns:
         TextDoc { text=raw_text, format_text=adapter.format_text or None,
-                 meta=full DocMeta, images=[...] }
+                 meta=DocMeta+filename, images=[...] }
 
     Raises:
         RAGError: ``code=reader.unsupported`` — 后缀无对应 adapter。
@@ -80,12 +80,7 @@ async def dispatch_bytes(
         result = await adapter(buffer, encoding=encoding)
     logger.info("reader.done ext=%s text_len=%d", ext, len(result.raw_text))
 
-    full_meta = result.meta.model_copy(
-        update={
-            "filename": filename,
-            "size_bytes": len(buffer),
-        }
-    )
+    full_meta = result.meta.model_copy(update={"filename": filename})
     return TextDoc(
         text=result.raw_text,
         format_text=result.format_text,

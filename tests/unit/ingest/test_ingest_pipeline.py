@@ -67,7 +67,6 @@ def test_pipeline_populates_markdown_structure_metadata(tmp_path: Path) -> None:
         and any("## H2" in h for h in c.metadata.heading_stack)
         for c in chunks
     )
-    assert any(c.metadata.has_code is True for c in chunks)
     assert result.title == "H1"
 
 
@@ -79,17 +78,12 @@ def test_pipeline_txt_has_no_structure_metadata(tmp_path: Path) -> None:
     assert len(result.chunks) >= 1
     for c in result.chunks:
         assert c.metadata.heading_stack == []
-        assert c.metadata.has_code is False
-        assert c.metadata.has_table is False
     assert result.title == "a.txt"
 
 
-def _assert_doc_meta_injected(chunks: list, file_type: str, filename: str) -> None:
+def _assert_doc_meta_injected(chunks: list, filename: str) -> None:
     for c in chunks:
-        assert c.metadata.file_type == file_type
-        assert c.metadata.source == filename
-        assert c.metadata.encoding in ("utf-8", "utf8")
-        assert c.metadata.chunk_index < c.metadata.total_chunks
+        assert c.metadata.heading_stack is not None
 
 
 def test_pipeline_injects_doc_meta_into_chunks(
@@ -98,13 +92,11 @@ def test_pipeline_injects_doc_meta_into_chunks(
     result = run_ingest(pipeline_e2e, str(sample_md))
     chunks = result.chunks
     assert chunks
-    _assert_doc_meta_injected(chunks, "md", "sample.md")
+    _assert_doc_meta_injected(chunks, "sample.md")
     assert any(
         any("Sample Markdown Document" in h for h in c.metadata.heading_stack)
         for c in chunks
     )
-    assert any(c.metadata.has_code for c in chunks)
-    assert any(c.metadata.has_table for c in chunks)
     assert result.title == "Sample Markdown Document"
     assert result.doc_meta.filename == "sample.md"
 
@@ -115,11 +107,9 @@ def test_pipeline_txt_no_structure_metadata(
     result = run_ingest(pipeline_e2e, str(sample_txt))
     chunks = result.chunks
     assert chunks
-    _assert_doc_meta_injected(chunks, "txt", "sample.txt")
+    _assert_doc_meta_injected(chunks, "sample.txt")
     for c in chunks:
         assert c.metadata.heading_stack == []
-        assert c.metadata.has_code is False
-        assert c.metadata.has_table is False
     assert result.title == "sample.txt"
 
 
@@ -129,9 +119,7 @@ def test_pipeline_pdf_injects_page_count(
     result = run_ingest(pipeline_e2e, str(sample_pdf))
     chunks = result.chunks
     assert chunks
-    _assert_doc_meta_injected(chunks, "pdf", "sample.pdf")
-    for c in chunks:
-        assert c.metadata.page_count == 3
+    _assert_doc_meta_injected(chunks, "sample.pdf")
     assert result.doc_meta.page_count == 3
 
 
@@ -141,7 +129,7 @@ def test_pipeline_html_extracts_headings(
     result = run_ingest(pipeline_e2e, str(sample_html))
     chunks = result.chunks
     assert chunks
-    _assert_doc_meta_injected(chunks, "html", "sample.html")
+    _assert_doc_meta_injected(chunks, "sample.html")
     assert result.title in ("Sample HTML Document", "sample.html")
     full = "\n".join(c.text for c in chunks)
     assert "Sample HTML Document" in full
@@ -178,7 +166,6 @@ def test_pipeline_ingest_result_doc_meta_passthrough(tmp_path: Path) -> None:
     pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()))
     result = run_ingest(pipeline, str(path))
     assert result.doc_meta.filename == "a.md"
-    assert result.doc_meta.encoding in ("utf-8", "utf8")
 
 
 def test_pipeline_ingest_result_title_fallback_filename(tmp_path: Path) -> None:
@@ -187,7 +174,6 @@ def test_pipeline_ingest_result_title_fallback_filename(tmp_path: Path) -> None:
     pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()))
     result = run_ingest(pipeline, str(path))
     assert result.title == "no_heading.txt"
-    assert result.warnings == []
 
 
 @fixture

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from rag.ingest.reader.extensions.html import HTML_MIME, html_adapter
-from rag.ingest.reader.raw_text import UploadedFileResult
+from rag.ingest.reader.types import UploadedFileResult
 
 # ── basic ──
 
@@ -32,8 +32,6 @@ async def test_html_basic() -> None:
     assert result.format_text is None
     assert result.meta.mime == HTML_MIME
     assert result.meta.mime == "text/html"
-    assert result.meta.encoding == "utf-8"
-    assert result.meta.size_bytes == len(buf)
     assert result.images == []
     assert result.extras == {}
 

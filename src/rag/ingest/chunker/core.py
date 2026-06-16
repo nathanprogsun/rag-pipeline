@@ -7,18 +7,13 @@ import re
 
 from rag.ingest.chunker._heading_re import collect_headings
 from rag.ingest.chunker.utils import valid_len
-from rag.ingest.types import Chunk, ChunkMetadata, DocMeta
+from rag.ingest.types import Chunk, ChunkMetadata
 
-from .code_block import (
-    CODE_FENCE_RE,
-    HTML_PRE_CODE_RE,
-    protect_code_block,
-)
+from .code_block import protect_code_block
 from .finalize import enforce_max_size, merge_chunks_to_target, merge_small_chunks
 from .recursive import common_split
 from .rules import CUSTOM_SPLIT_SIGN, build_steps
 from .settings import ChunkSettings
-from .table import str_is_md_table
 from .utils import restore_code_block_marker, simple_text
 
 logger = logging.getLogger(__name__)
@@ -29,15 +24,6 @@ _ASCII_PUNCT_BETWEEN_CN_RE = re.compile(r"([一-鿿])([!?,;.])([一-鿿])")
 # 顶层预切分隔符: 双换行或中英标点。
 # 双换行必须排在前面, 否则会被单换行规则先吃掉。
 _PRESPLIT_RE = re.compile(r"(\n\n|。|！|？|；|，|[!?,;.])(?=\S)")
-
-# per-chunk 检测正则
-# 代码 fence (是否完整跨 chunk 不影响) 或 HTML <pre><code> 已移至 code_block.py 复用。
-_TABLE_RE = re.compile(r"(?:^\|.+\|$\n?)+", re.MULTILINE)
-_HTML_TABLE_RE = re.compile(r"<table\b[\s\S]*?</table>", re.IGNORECASE)
-# Markdown 与 HTML 形式的图片引用。
-_IMAGE_REF_RE = re.compile(
-    r"!\[[^\]]*\]\([^)]+\)|<img\b[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE
-)
 
 
 def _normalize_ascii_punct(text: str) -> str:
@@ -70,48 +56,6 @@ def _heading_stack_for_chunk(chunk_text: str) -> list[str]:
     return [f"{'#' * lv} {t}" for lv, t in stack]
 
 
-def _has_code_in(text: str) -> bool:
-    """判断文本是否含代码 fence 或 HTML `<pre><code>` 块。"""
-    if CODE_FENCE_RE.search(text):
-        return True
-    if HTML_PRE_CODE_RE.search(text):
-        return True
-    return False
-
-
-def _has_table_in(text: str) -> bool:
-    """判断文本是否含 Markdown pipe 表或 HTML `<table>`。"""
-    if str_is_md_table(text):
-        return True
-    if _TABLE_RE.search(text):
-        return True
-    if _HTML_TABLE_RE.search(text):
-        return True
-    return False
-
-
-def _image_refs_in(text: str) -> list[str]:
-    """抽取文本中的图片引用 URL, 去重并保留首次出现顺序。"""
-    seen: set[str] = set()
-    out: list[str] = []
-    for m in _IMAGE_REF_RE.finditer(text):
-        # Markdown 形式: 整段 m.group(0); HTML 形式: src 在 group(1)。
-        url = m.group(1) if m.group(1) else m.group(0)
-        if url not in seen:
-            seen.add(url)
-            out.append(url)
-    return out
-
-
-def _guess_file_type(meta: DocMeta) -> str:
-    """从 ``meta`` 推断 ``file_type``: 优先取文件名后缀, 否则取 ``mime`` 子类型。"""
-    if meta.filename and "." in meta.filename:
-        return meta.filename.rsplit(".", 1)[-1].lower()
-    if meta.mime:
-        return meta.mime.split("/")[-1].lower()
-    return ""
-
-
 class Chunker:
     """按配置执行规范化、切分、合并并产出 `Chunk` 列表。"""
 
@@ -126,27 +70,23 @@ class Chunker:
         self,
         text: str,
         *,
-        meta: DocMeta | None = None,
         format_text: str | None = None,
         get_format_text: bool = True,
     ) -> list[Chunk]:
-        """主入口: 文本 + 文档元信息 -> `Chunk` 列表。
+        """主入口: 文本 -> `Chunk` 列表。
 
-        `format_text` (如有) 与 `text` 用同一规则并行切分, 按 `chunk_index` 对齐
-        回填到 `Chunk.raw_text` / `Chunk.format_text`; `get_format_text` 控制
-        `Chunk.text` 优先取 `format_text` 还是 `raw_text`。
+        `format_text` (如有) 与 `text` 用同一规则并行切分, 按 `chunk_index` 对齐;
+        `get_format_text` 控制 `Chunk.text` 优先取 `format_text` 还是 `text` 本身。
 
         Args:
             text: 已过 Normalizer 的原始文本。
-            meta: 上游 ``DocMeta`` (含 filename / mime / encoding / page_count),
-                None 时使用空 DocMeta, doc-level 字段会取默认值。
             format_text: 可选, csv/xlsx adapter 提供的 markdown table 视图。
             get_format_text: `True` (默认) 时 `Chunk.text` 取 `format_text` 优先,
-                `False` 时始终取 `raw_text`。
+                `False` 时始终取 `text` 自身的切分结果。
 
         Returns:
-            切分得到的 `Chunk` 列表, 含位置、doc-level 与 per-chunk 现场重算
-            的 heading/code/table/image 标记。
+            切分得到的 `Chunk` 列表, 仅含定位 (chunk_index) 与 per-chunk 重建的
+            heading_stack 标记。
         """
         # 步骤 1: 空文本直接返回空列表
         if not text or not text.strip():
@@ -169,14 +109,7 @@ class Chunker:
         if format_text:
             fmt = self._split_legacy(format_text)
 
-        # 步骤 4: 解析 doc-level 字段 (空 DocMeta 时全取默认)
-        doc = meta or DocMeta()
-        source = doc.filename or ""
-        file_type = _guess_file_type(doc)
-        page_count = doc.page_count
-        encoding = doc.encoding
-
-        # 步骤 5: 组装 Chunk
+        # 步骤 4: 组装 Chunk
         n = max(len(raw), len(fmt))
         out: list[Chunk] = []
         for i in range(n):
@@ -191,23 +124,9 @@ class Chunker:
             out.append(
                 Chunk(
                     text=text_out,
-                    raw_text=restored,
-                    format_text=fmt_seg,
                     metadata=ChunkMetadata(
-                        # 位置信息
                         chunk_index=i,
-                        total_chunks=n,
-                        valid_len=valid_len(restored),
-                        # doc-level 字段
-                        source=source,
-                        file_type=file_type,
-                        page_count=page_count,
-                        encoding=encoding,
-                        # per-chunk 现场重算
                         heading_stack=_heading_stack_for_chunk(restored),
-                        has_code=_has_code_in(restored),
-                        has_table=_has_table_in(restored),
-                        image_refs=_image_refs_in(restored),
                     ),
                 )
             )

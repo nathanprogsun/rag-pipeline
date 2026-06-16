@@ -13,7 +13,6 @@ def test_sample_txt_readable(sample_txt: Path) -> None:
     assert "中文" in doc.text
     assert "🎉" in doc.text
     assert doc.meta.mime == "text/plain"
-    assert doc.meta.datasource == "file"
 
 
 def test_sample_md_readable(sample_md: Path) -> None:
@@ -45,10 +44,6 @@ def test_sample_csv_with_format_text(sample_csv: Path) -> None:
     doc = read_file(sample_csv)
     assert "Alice" in doc.text
     assert "Beijing" in doc.text
-    # format_text 是 markdown table 视图
-    assert doc.meta.datasource == "file"
-    # 通过 dispatch 返回的 TextDoc 没有 format_text 字段, 但 csv adapter 内部生成了
-    # 这里只能验证 raw_text 正常
     assert doc.text.startswith("id,name,age,city")
 
 
@@ -66,9 +61,6 @@ def test_sample_docx_reads_paragraphs(sample_docx: Path) -> None:
     assert "Sample DOCX Document" in doc.text
     assert "Section A" in doc.text
     assert "python-docx" in doc.text
-    # docx 中 heading 也是 paragraph, python-docx 7 段: h1 + p + h2 + p + h2 + p + p
-    assert doc.meta.paragraph_count is not None
-    assert doc.meta.paragraph_count >= 5
 
 
 def test_all_fixtures_round_trip(all_sample_files: dict[str, Path]) -> None:
@@ -76,7 +68,6 @@ def test_all_fixtures_round_trip(all_sample_files: dict[str, Path]) -> None:
     for ext, path in all_sample_files.items():
         doc = read_file(path)
         assert doc.text, f"{ext} produced empty text"
-        assert doc.meta.datasource == "file"
         assert doc.meta.filename == path.name
 
 

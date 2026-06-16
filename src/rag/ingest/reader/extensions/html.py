@@ -52,11 +52,7 @@ async def html_adapter(
     return FormatReaderResult(
         raw_text=markdown,
         format_text=None,
-        meta=DocMeta(
-            mime=HTML_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-        ),
+        meta=DocMeta(mime=HTML_MIME),
         images=[],
         extras={},
     )

@@ -186,16 +186,14 @@ class IngestPipeline:
     ) -> IngestResult:
         # 1. 读取文件
         text_doc = await self._read_file(file)
-        warnings: list[str] = []
 
         # 2. 标准化
         text_doc = await self.normalizer.normalize(text_doc)
         text = text_doc.text
 
-        # 3. 分块 (直接传 DocMeta, 不再走 ChunkContext 中转)
+        # 3. 分块
         chunks: list[Chunk] = self.chunker.split(
             text,
-            meta=text_doc.meta,
             format_text=text_doc.format_text,
             get_format_text=True,
         )
@@ -206,7 +204,6 @@ class IngestPipeline:
             chunks=chunks,
             title=title,
             doc_meta=doc_meta,
-            warnings=warnings,
         )
 
         # 4. 存储

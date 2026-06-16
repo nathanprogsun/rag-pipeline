@@ -54,8 +54,6 @@ async def pdf_adapter(
 
     raw_text = postprocess_lite_parse_pages(page_texts)
 
-    paragraph_count = sum(1 for line in raw_text.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=None,
@@ -63,9 +61,6 @@ async def pdf_adapter(
         extras={},
         meta=DocMeta(
             mime=PDF_MIME,
-            encoding=encoding,  # 保留传入, postprocess 按 utf-8 处理
-            size_bytes=len(buffer),
             page_count=len(all_pages),
-            paragraph_count=paragraph_count,
         ),
     )

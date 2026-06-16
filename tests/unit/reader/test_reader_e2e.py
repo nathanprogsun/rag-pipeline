@@ -11,8 +11,6 @@ def test_e2e_txt(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("hello", encoding="utf-8")
     doc = read_file(tmp_path / "a.txt")
     assert doc.text == "hello"
-    assert doc.meta.size_bytes == 5
-    assert doc.meta.datasource == "file"
     assert doc.meta.mime == "text/plain"
 
 
@@ -47,12 +45,3 @@ def test_e2e_read_file_filename_filled(tmp_path: Path) -> None:
     (tmp_path / "report.txt").write_text("x", encoding="utf-8")
     doc = read_file(tmp_path / "report.txt")
     assert doc.meta.filename == "report.txt"
-
-
-def test_e2e_read_file_source_uri(tmp_path: Path) -> None:
-    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
-    doc = read_file(tmp_path / "a.txt")
-    assert doc.meta.datasource == "file"
-    assert str(doc.meta.size_bytes) == "1"
-    # source field 不在 DocMeta 里 (是 TextDoc 层的标识)
-    # 但 dispatch_bytes 内部确实填了 datasource

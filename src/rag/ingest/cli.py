@@ -69,11 +69,6 @@ def _render_result(result: IngestResult) -> None:
             f"persisted: dataset_id={pr.dataset_id} name={pr.dataset_name!r} "
             f"old_chunks={pr.old_chunk_count} new_chunks={pr.new_chunk_count}",
         )
-    if result.warnings:
-        typer.echo("---")
-        typer.echo("warnings:")
-        for w in result.warnings:
-            typer.echo(f"{_YELLOW}{w}{_RESET}", err=True)
 
 
 def _render_outcome(outcome: IngestOutcome) -> bool:
