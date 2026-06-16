@@ -34,10 +34,7 @@ async def test_csv_basic() -> None:
     assert result.format_text is not None
     assert result.images == []
     # 3 列, header + 2 数据行
-    assert "row_count" in result.extras
-    row_count = result.extras["row_count"]
-    assert isinstance(row_count, int)
-    assert row_count >= 3
+    assert "Alice" in result.raw_text
 
 
 # ── chinese comma ──
@@ -101,8 +98,8 @@ async def test_csv_empty() -> None:
     # 无 header, format_text 应为 None
     assert result.format_text is None
     assert result.meta.mime == "text/csv"
-    # 空字符串 split('\n') 后没有非空行, row_count = 0
-    assert result.extras["row_count"] == 0
+    # 空字符串 split('\n') 后没有非空行
+    assert result.raw_text == ""
 
 
 # ── only header ──
@@ -118,7 +115,6 @@ async def test_csv_only_header() -> None:
     assert result.format_text is not None
     # header + sep (无数据行)
     assert result.format_text == "| name | age | city |\n| --- | --- | --- |"
-    assert "row_count" in result.extras
 
 
 # ── quoted field ──

@@ -85,7 +85,7 @@ async def csv_adapter(
         - ``raw_text``: 解码后的 csv 原文。
         - ``format_text``: markdown 表格视图; 仅有表头也输出 (表头 + 分隔行),
           无表头返回 ``None``。
-        - ``meta.mime = "text/csv"``, ``extras = {"row_count": ...}``。
+        - ``meta.mime = "text/csv"``。
 
     Raises:
         RAGError: ``code=READER_ENCODING`` 解码失败; ``code=READER_PARSE`` 解析失败。
@@ -105,13 +105,9 @@ async def csv_adapter(
     except Exception as e:
         raise wrap_parse_error("<buffer:csv>", e, "csv") from e
 
-    # 按换行拆分的非空行数, 用于 dispatch 与审计
-    row_count = sum(1 for line in raw_text.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=format_text,
         meta=DocMeta(mime=CSV_MIME),
         images=[],
-        extras={"row_count": row_count},
     )

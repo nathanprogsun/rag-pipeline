@@ -40,7 +40,6 @@ def test_pdf_extension_adapter_against_real_sample() -> None:
     # 薄封装: format_text/images 全空
     assert result.format_text is None
     assert result.images == []
-    assert result.extras == {}
 
 
 # ── 错误包装 ──

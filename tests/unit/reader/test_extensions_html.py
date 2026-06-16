@@ -33,7 +33,6 @@ async def test_html_basic() -> None:
     assert result.meta.mime == HTML_MIME
     assert result.meta.mime == "text/html"
     assert result.images == []
-    assert result.extras == {}
 
 
 # ── with_base64_image ──

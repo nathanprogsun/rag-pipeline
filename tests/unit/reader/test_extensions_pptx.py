@@ -61,10 +61,9 @@ async def test_pptx_extension_adapter_minimal() -> None:
     assert (
         result.meta.page_count is None
     )  # parse_office 不返回 page_count, 与原 adapter 一致
-    # 薄封装不抽图片 / extras
+    # 薄封装不抽图片
     assert result.format_text is None
     assert result.images == []
-    assert result.extras == {}
 
 
 # ── 真实 fixture ──

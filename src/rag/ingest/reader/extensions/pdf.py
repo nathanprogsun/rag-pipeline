@@ -58,7 +58,6 @@ async def pdf_adapter(
         raw_text=raw_text,
         format_text=None,
         images=[],
-        extras={},
         meta=DocMeta(
             mime=PDF_MIME,
             page_count=len(all_pages),

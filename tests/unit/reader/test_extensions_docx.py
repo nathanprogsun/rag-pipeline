@@ -99,7 +99,6 @@ async def test_docx_extension_adapter_minimal() -> None:
     assert result.images == []
     # docx 适配器只返 raw_text, 不返 format_text
     assert result.format_text is None
-    assert result.extras == {}
 
 
 # ── 2. with upload_file: 内嵌图上传 (Section 5.3) ───────────────────────

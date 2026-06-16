@@ -148,7 +148,6 @@ async def docx_adapter(
         format_text=None,
         meta=DocMeta(mime=DOCX_MIME),
         images=list(images),
-        extras={},
     )
 
 

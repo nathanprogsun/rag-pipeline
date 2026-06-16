@@ -54,5 +54,4 @@ async def html_adapter(
         format_text=None,
         meta=DocMeta(mime=HTML_MIME),
         images=[],
-        extras={},
     )

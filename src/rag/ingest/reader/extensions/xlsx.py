@@ -145,5 +145,4 @@ async def xlsx_adapter(
         format_text=format_text,
         meta=DocMeta(mime=XLSX_MIME),
         images=[],
-        extras={},
     )

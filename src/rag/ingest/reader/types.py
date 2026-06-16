@@ -32,14 +32,12 @@ class FormatReaderResult:
     - meta: 必填, 必含 mime / encoding / page_count / paragraph_count
     - format_text: 可选, csv/xlsx 的 markdown table 视图
     - images: 可选, adapter 内已上传的图片 URL/key 列表 (DOCX 等)
-    - extras: 兜底, 适配器需要塞其他临时字段时使用
     """
 
     raw_text: str
     meta: DocMeta
     format_text: str | None = None
     images: list[str] = field(default_factory=list)
-    extras: dict[str, object] = field(default_factory=dict)
 
 
 # ---------- MIME → 文件后缀映射 ----------

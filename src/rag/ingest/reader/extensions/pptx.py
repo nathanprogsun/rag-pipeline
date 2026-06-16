@@ -25,7 +25,7 @@ async def pptx_adapter(
         upload_file: 保留以对齐 ``FormatAdapter`` 协议, pptx 不抽图故忽略。
 
     Returns:
-        ``FormatReaderResult { raw_text, format_text=None, meta, images=[], extras={} }``。
+        ``FormatReaderResult { raw_text, format_text=None, meta, images=[] }``。
 
     Raises:
         RAGError: ``code=READER_PARSE`` —— ``parse_office`` 解析失败时包装。
@@ -43,5 +43,4 @@ async def pptx_adapter(
         format_text=None,
         meta=DocMeta(mime=PPTX_MIME),
         images=[],
-        extras={},
     )
