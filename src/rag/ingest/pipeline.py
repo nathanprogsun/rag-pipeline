@@ -108,7 +108,9 @@ class IngestPipeline:
         items: list[IngestResult] = []
         errors: list[tuple[str, BaseException]] = []
         for file, outcome in zip(files, results, strict=True):
-            if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, Exception
+            ):
                 # CancelledError 等 BaseException-but-not-Exception: 透传, 不入 errors
                 raise outcome
             if isinstance(outcome, Exception):
