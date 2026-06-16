@@ -14,7 +14,7 @@ from rag.ingest import pipeline as pipeline_mod
 from rag.ingest.chunker import Chunker, ChunkSettings
 from rag.ingest.normalizer import NoOpNormalizer, StructureMode, StructureNormalizer
 from rag.ingest.pipeline import IngestPipeline
-from rag.ingest.types import IngestResult, PersistConfig
+from rag.ingest.types import DocMeta, IngestResult, PersistConfig
 
 
 def test_pipeline_txt_round_trip(tmp_path: Path) -> None:
@@ -266,3 +266,35 @@ async def test_ingest_many_resolves_dataset_once_for_create(
     # 三个文件都成功 (没走真实 PG, 但走通了分支)
     assert len(outcome.items) == 3
     assert outcome.errors == []
+
+
+@pytest.mark.asyncio
+async def test_max_concurrent_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    files = [(tmp_path / f"f{i}.txt") for i in range(20)]
+    for f in files:
+        f.write_text("x")
+
+    in_flight = 0
+    max_seen = 0
+
+    async def fake_process(
+        self: IngestPipeline,
+        file: Path,
+        *,
+        dataset_id: uuid.UUID | None = None,
+    ) -> IngestResult:
+        nonlocal in_flight, max_seen
+        in_flight += 1
+        max_seen = max(max_seen, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return IngestResult(
+            chunks=[], title=None, doc_meta=DocMeta(filename=str(file))
+        )
+
+    monkeypatch.setattr(IngestPipeline, "_process", fake_process)
+    pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()), max_concurrent=4)
+    await pipeline.ingest_many([str(f) for f in files])
+    assert max_seen <= 4

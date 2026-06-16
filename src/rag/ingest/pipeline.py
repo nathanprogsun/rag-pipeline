@@ -83,10 +83,19 @@ class IngestPipeline:
         chunker: Chunker,
         normalizer: Normalizer | None = None,
         persist_config: PersistConfig | None = None,
+        *,
+        max_concurrent: int = 8,
     ) -> None:
+        """Args:
+            max_concurrent: 单批并发上限, 防止 1000 文件目录撑爆 PG pool + embedder。
+                默认 8 与 ``database.py:pool_size=10`` 留 2 余量。
+        """
+        if max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
         self.chunker = chunker
         self.normalizer: Normalizer = normalizer or NoOpNormalizer()
         self.persist_config = persist_config
+        self._sem = asyncio.Semaphore(max_concurrent)
 
     @property
     def persist_enabled(self) -> bool:
@@ -116,7 +125,10 @@ class IngestPipeline:
 
         # 2. 并行 ingest
         results = await asyncio.gather(
-            *[self._process(file, dataset_id=resolved_dataset_id) for file in files],
+            *[
+                self._process_gated(file, dataset_id=resolved_dataset_id)
+                for file in files
+            ],
             return_exceptions=True,
         )
         items: list[IngestResult] = []
@@ -202,3 +214,9 @@ class IngestPipeline:
             updated_result = await self._maybe_persist(result, dataset_id=dataset_id)
             return updated_result
         return result
+
+    async def _process_gated(
+        self, file: Path, *, dataset_id: uuid.UUID | None
+    ) -> IngestResult:
+        async with self._sem:
+            return await self._process(file, dataset_id=dataset_id)
