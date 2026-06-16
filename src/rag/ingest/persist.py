@@ -9,6 +9,7 @@ chunk 集合, 不会产生重复。
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 
@@ -29,6 +30,19 @@ from rag.ingest.types import ChunkMetadata as IngestChunkMetadata
 from rag.ingest.types import IngestResult
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_chunks(chunks: list[IngestChunk]) -> bytes:
+    """对 chunk text 列表做 SHA-256, 用于 document 级 dedup。
+
+    Returns:
+        32-byte SHA-256 digest.
+    """
+    h = hashlib.sha256()
+    for c in chunks:
+        h.update(c.text.encode("utf-8"))
+        h.update(b"\x00")  # 用 NUL 分隔避免相邻 chunk 边界混淆
+    return h.digest()
 
 
 async def _create_dataset_once(
@@ -139,6 +153,7 @@ async def persist(
         doc = await document_repo.upsert(
             dataset_id=ds.id,
             filename=filename,
+            content_hash=_hash_chunks(chunks),
             modality="text",
             total_chunks=len(chunks),
         )
@@ -160,8 +175,22 @@ async def persist(
     if document_id is not None:
         old_count = await chunk_repo.soft_delete_by_document(document_id)
 
-    # 5. 批量 insert 新 chunk
-    await chunk_repo.bulk_insert(domain_chunks)
+    # 5. 批量 insert 新 chunk; 失败时把 document 标为 failed
+    # 注: bulk_insert 抛异常时, 整体事务会回滚, 这里写的 mark_status("failed")
+    # 也会被一起回滚 —— 真正的 durable 失败状态需要后续用独立 session 提交。
+    # 现阶段这个 mark 仅在同事务内作为调试信号, 用于事务窗口内排查。
+    try:
+        await chunk_repo.bulk_insert(domain_chunks)
+    except Exception:
+        if document_id is not None:
+            await document_repo.mark_status(
+                document_id, "failed", error_code="PERSIST_INSERT_FAILED"
+            )
+        raise
+
+    # 6. 标记 document 为 completed (必须在 commit 前, 同一事务持久化)
+    if document_id is not None:
+        await document_repo.mark_status(document_id, "completed")
 
     await session.commit()
     logger.info(
