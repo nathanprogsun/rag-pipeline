@@ -33,7 +33,7 @@ from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.search.orchestrator import SearchPipeline
 from rag.search.post.cite import SimpleCite
 from rag.search.post.parent_doc import NoOpParentDoc, ParentDocExpander
-from rag.search.retrieve.subgraph import SearchSubgraph
+from tests.integration._retriever import make_subgraph
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -85,100 +85,6 @@ async def _seed_chunk(
     )
     await db_session.commit()
     return chunk
-
-
-class _RepoRetriever:
-    """Runnable adapter wrapping ChunkRepository。"""
-
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        dataset_id: uuid.UUID,
-        mode: str,
-        embed_model: Embeddings | None = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self.dataset_id = dataset_id
-        self.mode = mode
-        self.embed_model = embed_model
-
-    async def ainvoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        query = str(input["query"])
-        raw_top_k = input.get("top_k", 10)
-        top_k = raw_top_k if isinstance(raw_top_k, int) else 10
-
-        async with self.session_factory() as session:
-            repo = ChunkRepository(session)
-            if self.mode == "vector":
-                assert self.embed_model is not None
-                query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
-            elif self.mode == "fulltext":
-                rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
-            else:
-                msg = f"unknown mode: {self.mode}"
-                raise ValueError(msg)
-
-            return [
-                ScoredDocument(
-                    chunk_id=chunk.id,
-                    dataset_id=chunk.dataset_id,
-                    text=chunk.text,
-                    score=score,
-                    rank=i,
-                    source=self.mode,  # type: ignore[arg-type]
-                    modality=chunk.modality,
-                    image_path=chunk.image_path,
-                    metadata=ChunkMetadata(
-                        dataset_id=chunk.dataset_id,
-                        datasource=chunk.metadata.datasource,
-                        filename=chunk.metadata.filename,
-                        parent_title=chunk.metadata.parent_title,
-                        chunk_index=chunk.metadata.chunk_index,
-                    ),
-                )
-                for i, (chunk, score) in enumerate(rows)
-            ]
-
-    def invoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        from rag.infra.pg.runnable_sync import run_coroutine_sync
-
-        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
-
-
-def _make_subgraph(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    dataset_id: uuid.UUID,
-    embed_model: Embeddings,
-    top_k: int = 10,
-) -> SearchSubgraph:
-    return SearchSubgraph(
-        dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="vector",
-            embed_model=embed_model,
-        ),
-        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="fulltext",
-        ),
-        top_k=top_k,
-    )
 
 
 def _make_scored(chunk: ChunkModel, *, score: float = 0.5) -> ScoredDocument:
@@ -456,7 +362,7 @@ async def test_real_orchestrator_with_parent_doc_full_chain(
         chunks.append(c)
 
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,

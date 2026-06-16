@@ -24,19 +24,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rag.config import settings
-from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
-from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.infra.text.citation_check import (
     parse_inline_citations,
     resolve_citation_positions,
 )
 from rag.search.orchestrator import SearchPipeline
 from rag.search.post.cite import SimpleCite
-from rag.search.retrieve.subgraph import SearchSubgraph
+from tests.integration._retriever import make_subgraph
 
 EMBED_DIM: int = settings.openai_embedding_dim
 
@@ -84,105 +83,6 @@ async def _seed_chunks(
     return chunks
 
 
-class _RepoRetriever:
-    """Runnable adapter wrapping ChunkRepository。"""
-
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        dataset_id: uuid.UUID,
-        mode: str,
-        embed_model: Embeddings | None = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self.dataset_id = dataset_id
-        self.mode = mode
-        self.embed_model = embed_model
-
-    async def ainvoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        query = str(input["query"])
-        raw_top_k = input.get("top_k", 10)
-        top_k = raw_top_k if isinstance(raw_top_k, int) else 10
-
-        async with self.session_factory() as session:
-            repo = ChunkRepository(session)
-            if self.mode == "vector":
-                assert self.embed_model is not None
-                query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
-            elif self.mode == "fulltext":
-                rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
-            else:
-                msg = f"unknown mode: {self.mode}"
-                raise ValueError(msg)
-
-            return [
-                ScoredDocument(
-                    chunk_id=chunk.id,
-                    dataset_id=chunk.dataset_id,
-                    text=chunk.text,
-                    score=score,
-                    rank=i,
-                    source=self.mode,  # type: ignore[arg-type]
-                    modality=chunk.modality,
-                    image_path=chunk.image_path,
-                    metadata=ChunkMetadata(
-                        dataset_id=chunk.dataset_id,
-                        datasource=chunk.metadata.datasource,
-                        filename=chunk.metadata.filename,
-                        parent_title=chunk.metadata.parent_title,
-                        chunk_index=chunk.metadata.chunk_index,
-                    ),
-                )
-                for i, (chunk, score) in enumerate(rows)
-            ]
-
-    def invoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        from rag.infra.pg.runnable_sync import run_coroutine_sync
-
-        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
-
-
-def _make_subgraph(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    dataset_id: uuid.UUID,
-    embed_model: Embeddings,
-    top_k: int = 10,
-) -> SearchSubgraph:
-    return SearchSubgraph(
-        dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="vector",
-            embed_model=embed_model,
-        ),
-        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="fulltext",
-        ),
-        top_k=top_k,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Real cite scenarios
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_real_cite_through_orchestrator(
     db_session: AsyncSession,
@@ -205,7 +105,7 @@ async def test_real_cite_through_orchestrator(
     )
 
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -275,7 +175,7 @@ async def test_real_cite_image_caption_preserves_image_path(
     await db_session.commit()
 
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -317,7 +217,7 @@ async def test_real_cite_with_custom_source_name_fn(
         return f"ds-{doc.dataset_id.hex[:6]}-src-{idx}"
 
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -362,13 +262,13 @@ async def test_real_cite_two_datasets_ordered_1_based(
     )
 
     subgraphs = {
-        ds_a: _make_subgraph(
+        ds_a: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_a,
             embed_model=live_embed_model,
             top_k=5,
         ),
-        ds_b: _make_subgraph(
+        ds_b: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_b,
             embed_model=live_embed_model,
@@ -421,7 +321,7 @@ async def test_real_cite_round_trip_with_gen_emitting_markers(
         )
 
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -456,7 +356,7 @@ async def test_real_cite_empty_dataset_yields_empty_citations(
     """真实场景 6: 空 dataset → empty retrieval → empty citations。"""
     ds = await _create_dataset(db_session, "cite-empty")
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,

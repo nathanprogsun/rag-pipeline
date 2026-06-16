@@ -3,7 +3,7 @@
 使用 ``pg_session_factory`` fixture (conftest) 创建独立 sessions per retriever
 (避免 asyncio.gather 下共享 session 的 transaction abort 冲突)。
 
-通过 ``_RepoRetriever`` Runnable adapter 桥接:仍然按 Runnable 契约
+通过 ``RepoRetriever`` Runnable adapter 桥接:仍然按 Runnable 契约
 接收 ``ainvoke({"query", "top_k"})``,但内部用 ChunkRepository。
 """
 
@@ -13,22 +13,20 @@ import uuid
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from langchain_core.runnables import Runnable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
 
-from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
-from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.search.retrieve.subgraph import (
     SearchRequestValidationError,
     SearchSubgraph,
 )
+from tests.integration._retriever import RepoRetriever
 
 EMBED_DIM = 1536
 
@@ -53,85 +51,6 @@ class FakeEmbeddings(Embeddings):
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [_unit_vector(0) for _ in texts]
-
-
-# ---------- Runnable adapter for ChunkRepository ----------
-
-
-class _RepoRetriever(Runnable):
-    """Runnable wrapping ChunkRepository (uses its own session, no AsyncSessionLocal).
-
-    Per retriever: gets a fresh session from the shared sessionmaker.
-    Avoids the module-level AsyncSessionLocal cross-loop issue.
-    """
-
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        dataset_id: uuid.UUID,
-        mode: str,  # "vector" or "fulltext"
-        embed_model: Embeddings | None = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self.dataset_id = dataset_id
-        self.mode = mode
-        self.embed_model = embed_model
-
-    async def ainvoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        query = str(input["query"])
-        raw_top_k = input.get("top_k", 10)
-        top_k = raw_top_k if isinstance(raw_top_k, int) else 10
-
-        # Each retriever gets its own session
-        async with self.session_factory() as session:
-            repo = ChunkRepository(session)
-            if self.mode == "vector":
-                assert self.embed_model is not None
-                query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
-            elif self.mode == "fulltext":
-                rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
-            else:
-                msg = f"unknown mode: {self.mode}"
-                raise ValueError(msg)
-
-            return [
-                ScoredDocument(
-                    chunk_id=chunk.id,
-                    dataset_id=chunk.dataset_id,
-                    text=chunk.text,
-                    score=score,
-                    rank=i,
-                    source=self.mode,  # type: ignore[arg-type]
-                    modality=chunk.modality,
-                    image_path=chunk.image_path,
-                    metadata=ChunkMetadata(
-                        dataset_id=chunk.dataset_id,
-                        datasource=chunk.metadata.datasource,
-                        filename=chunk.metadata.filename,
-                        parent_title=chunk.metadata.parent_title,
-                        chunk_index=chunk.metadata.chunk_index,
-                    ),
-                )
-                for i, (chunk, score) in enumerate(rows)
-            ]
-
-    def invoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        """Sync entrypoint via run_coroutine_sync (mirrors VectorRetriever)."""
-        from rag.infra.pg.runnable_sync import run_coroutine_sync
-
-        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
 
 
 # ---------- Helpers ----------
@@ -188,13 +107,13 @@ async def test_subgraph_fuses_vector_and_fulltext(
         await _set_tsvector(db_session, c.id, ChineseTokenizer().build_tsvector(c.text))
     await db_session.commit()
 
-    vector_retriever = _RepoRetriever(
+    vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
         embed_model=FakeEmbeddings(),
     )
-    fulltext_retriever = _RepoRetriever(
+    fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="fulltext",
@@ -243,13 +162,13 @@ async def test_subgraph_vector_only_match(
     )
     await db_session.commit()
 
-    vector_retriever = _RepoRetriever(
+    vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
         embed_model=FakeEmbeddings(),
     )
-    fulltext_retriever = _RepoRetriever(
+    fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="fulltext",
@@ -279,13 +198,13 @@ async def test_subgraph_empty_result_when_no_chunks(
     """
     dataset_id = await _create_dataset(db_session, "subgraph-empty-test")
 
-    vector_retriever = _RepoRetriever(
+    vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
         embed_model=FakeEmbeddings(),
     )
-    fulltext_retriever = _RepoRetriever(
+    fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="fulltext",
@@ -313,13 +232,13 @@ async def test_subgraph_raises_on_empty_query(
     """
     dataset_id = await _create_dataset(db_session, "subgraph-validation-test")
 
-    vector_retriever = _RepoRetriever(
+    vector_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="vector",
         embed_model=FakeEmbeddings(),
     )
-    fulltext_retriever = _RepoRetriever(
+    fulltext_retriever = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=dataset_id,
         mode="fulltext",
@@ -357,13 +276,13 @@ async def test_subgraph_per_dataset_isolation(
     await db_session.commit()
 
     # Subgraph for dataset A only
-    vector_retriever_a = _RepoRetriever(
+    vector_retriever_a = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=ds_a,
         mode="vector",
         embed_model=FakeEmbeddings(),
     )
-    fulltext_retriever_a = _RepoRetriever(
+    fulltext_retriever_a = RepoRetriever(
         session_factory=pg_session_factory,
         dataset_id=ds_a,
         mode="fulltext",
