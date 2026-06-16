@@ -8,8 +8,8 @@ from io import StringIO
 from typing import Final
 
 from rag.ingest.reader.extensions.base import wrap_encoding_error, wrap_parse_error
-from rag.ingest.reader.raw_text import UploadFileHandler, read_raw_text
-from rag.ingest.reader.types import FormatReaderResult
+from rag.ingest.reader.raw_text import read_raw_text
+from rag.ingest.reader.types import FormatReaderResult, UploadFileHandler
 from rag.ingest.types import DocMeta
 
 logger = logging.getLogger(__name__)
@@ -91,9 +91,7 @@ async def csv_adapter(
         RAGError: ``code=READER_ENCODING`` 解码失败; ``code=READER_PARSE`` 解析失败。
     """
     try:
-        raw_text = await read_raw_text(
-            buffer, encoding=encoding, upload_file=upload_file
-        )
+        raw_text = await read_raw_text(buffer, encoding=encoding)
     except UnicodeDecodeError as e:
         # ``read_raw_text`` 内部已有兜底, 此处是防御性捕获
         raise wrap_encoding_error("<buffer:csv>", e, "csv") from e
@@ -114,7 +112,6 @@ async def csv_adapter(
         raw_text=raw_text,
         format_text=format_text,
         meta=DocMeta(
-            datasource="file",  # 占位, dispatch 覆盖
             mime=CSV_MIME,
             encoding=encoding,
             size_bytes=len(buffer),

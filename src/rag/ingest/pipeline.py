@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 
 from rag.infra.pg.database import AsyncSessionLocal
 from rag.ingest.chunker import Chunker
 from rag.ingest.chunker._heading_re import extract_first_title
 from rag.ingest.normalizer import NoOpNormalizer, Normalizer
+from rag.ingest.persist import _create_dataset_once
 from rag.ingest.persist import persist as persist_chunks
 from rag.ingest.reader import dispatch_bytes
 from rag.ingest.reader.file import read_to_buffer
@@ -100,9 +102,20 @@ class IngestPipeline:
         if not files:
             return IngestOutcome(items=[], warnings=warnings, errors=[])
 
+        # 1.5 解析 dataset (并发前一次性创建, 消除 cfg.adopt race)
+        resolved_dataset_id: uuid.UUID | None = None
+        if self.persist_enabled and self.persist_config is not None and self.persist_config.create_dataset:
+            async with AsyncSessionLocal() as session:
+                resolved_dataset_id = await _create_dataset_once(
+                    session, self.persist_config.dataset_name
+                )
+            # 之后所有 _process 直接用 resolved_dataset_id, 不再 mutate config
+        elif self.persist_enabled and self.persist_config is not None and self.persist_config.dataset_id is not None:
+            resolved_dataset_id = self.persist_config.dataset_id
+
         # 2. 并行 ingest
         results = await asyncio.gather(
-            *[self._process(file) for file in files],
+            *[self._process(file, dataset_id=resolved_dataset_id) for file in files],
             return_exceptions=True,
         )
         items: list[IngestResult] = []
@@ -122,7 +135,9 @@ class IngestPipeline:
 
         return IngestOutcome(items=items, warnings=warnings, errors=errors)
 
-    async def _maybe_persist(self, result: IngestResult) -> IngestResult:
+    async def _maybe_persist(
+        self, result: IngestResult, *, dataset_id: uuid.UUID
+    ) -> IngestResult:
         cfg = self.persist_config
         if cfg is None or not cfg.enabled:
             return result
@@ -131,12 +146,8 @@ class IngestPipeline:
             pr = await persist_chunks(
                 session,
                 result,
-                dataset_id=cfg.dataset_id,
-                create_dataset=cfg.create_dataset,
-                dataset_name=cfg.dataset_name,
+                dataset_id=dataset_id,
             )
-        if cfg.create_dataset:
-            cfg.adopt(pr.dataset_id)
         outcome = PersistOutcome(
             dataset_id=pr.dataset_id,
             dataset_name=pr.dataset_name,
@@ -157,6 +168,8 @@ class IngestPipeline:
     async def _process(
         self,
         file: Path,
+        *,
+        dataset_id: uuid.UUID | None = None,
     ) -> IngestResult:
         # 1. 读取文件
         text_doc = await self._read_file(file)
@@ -184,5 +197,7 @@ class IngestPipeline:
         )
 
         # 4. 存储
-        updated_result = await self._maybe_persist(result)
-        return updated_result
+        if dataset_id is not None:
+            updated_result = await self._maybe_persist(result, dataset_id=dataset_id)
+            return updated_result
+        return result

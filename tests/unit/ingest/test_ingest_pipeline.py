@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from asyncio import CancelledError
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,10 +10,11 @@ import pytest
 from pytest import fixture
 
 from ingest_helpers import run_ingest
+from rag.ingest import pipeline as pipeline_mod
 from rag.ingest.chunker import Chunker, ChunkSettings
 from rag.ingest.normalizer import NoOpNormalizer, StructureMode, StructureNormalizer
 from rag.ingest.pipeline import IngestPipeline
-from rag.ingest.types import IngestResult
+from rag.ingest.types import IngestResult, PersistConfig
 
 
 def test_pipeline_txt_round_trip(tmp_path: Path) -> None:
@@ -206,10 +208,61 @@ async def test_ingest_many_propagates_cancelled_error(
     f = tmp_path / "a.txt"
     f.write_text("hello")
 
-    async def cancel(_: Path) -> IngestResult:
+    async def cancel(_: Path, *, dataset_id: uuid.UUID | None = None) -> IngestResult:
         raise CancelledError()
 
     pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()))
     monkeypatch.setattr(pipeline, "_process", cancel)
     with pytest.raises(CancelledError):
         await pipeline.ingest_many([str(f)])
+
+
+@pytest.mark.asyncio
+async def test_ingest_many_resolves_dataset_once_for_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并发 ingest + create_dataset=True 必须只创建 1 个 dataset (消除 cfg.adopt race)。"""
+    f1, f2, f3 = tmp_path / "a.txt", tmp_path / "b.txt", tmp_path / "c.txt"
+    f1.write_text("a", encoding="utf-8")
+    f2.write_text("b", encoding="utf-8")
+    f3.write_text("c", encoding="utf-8")
+
+    create_calls = 0
+    resolved_id = uuid.uuid4()
+
+    async def fake_create(session: object, name: str | None) -> uuid.UUID:
+        nonlocal create_calls
+        create_calls += 1
+        return resolved_id
+
+    monkeypatch.setattr(pipeline_mod, "_create_dataset_once", fake_create)
+
+    # 短路 _process / _maybe_persist: 不真跑 PG 落库, 只验 dataset_id 透传
+    async def fake_process(
+        self: IngestPipeline,
+        file: Path,
+        *,
+        dataset_id: uuid.UUID | None = None,
+    ) -> IngestResult:
+        from rag.ingest.types import DocMeta
+
+        return IngestResult(
+            chunks=[],
+            title=file.name,
+            doc_meta=DocMeta(filename=file.name),
+        )
+
+    monkeypatch.setattr(IngestPipeline, "_process", fake_process)
+
+    pipeline = IngestPipeline(
+        chunker=Chunker(ChunkSettings()),
+        persist_config=PersistConfig(
+            create_dataset=True, dataset_name="x", enabled=True
+        ),
+    )
+    outcome = await pipeline.ingest_many([str(f1), str(f2), str(f3)])
+
+    assert create_calls == 1
+    # 三个文件都成功 (没走真实 PG, 但走通了分支)
+    assert len(outcome.items) == 3
+    assert outcome.errors == []

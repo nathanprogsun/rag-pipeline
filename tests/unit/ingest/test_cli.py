@@ -188,7 +188,9 @@ def test_ingest_one_failure_does_not_break_batch(
 
     original = IngestPipeline._process
 
-    async def flaky_process(self: IngestPipeline, file: Path) -> object:
+    async def flaky_process(
+        self: IngestPipeline, file: Path, *, dataset_id: object = None
+    ) -> object:
         if file.name == "bad.md":
             raise RuntimeError("synthetic failure")
         return await original(self, file)

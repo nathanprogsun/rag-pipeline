@@ -2,8 +2,8 @@
 
 架构:
     read_file(path) ─┐
-                     ├─> dispatch_bytes(buffer, ext, source) ─> EXTENSION_ADAPTERS
-    read_url(url)   ─┘                                          └─> 7 format adapters
+                     ├─> dispatch_bytes(buffer, ext, filename) ─> EXTENSION_ADAPTERS
+    read_url(url)   ─┘                                          └─> format adapters
 """
 
 from __future__ import annotations

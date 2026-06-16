@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from rag.config import settings
 from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
-from rag.domain.enums import StoredDatasource
 from rag.error_codes import IngestErrorCode
 from rag.exception import RAGError
 from rag.infra.llm.embed import get_embed_model
@@ -29,6 +28,30 @@ from rag.ingest.types import ChunkMetadata as IngestChunkMetadata
 from rag.ingest.types import IngestResult
 
 logger = logging.getLogger(__name__)
+
+
+async def _create_dataset_once(
+    session: AsyncSession,
+    dataset_name: str | None,
+) -> uuid.UUID:
+    """``ingest_many`` 顶部一次性创建 dataset。
+
+    与 `dataset_repo.create` 不同: 后续 ``dataset_repo.create`` 会被 unique 约束保护 (Phase 2)。
+    """
+    if dataset_name is None:
+        raise RAGError(
+            code=IngestErrorCode.PERSIST_INVALID_ARGS,
+            message="create_dataset=True 必须配 dataset_name",
+        )
+    repo = DatasetRepository(session)
+    ds = await repo.create(
+        name=dataset_name,
+        embed_model=settings.openai_embedding_model,
+        embed_dim=settings.openai_embedding_dim,
+    )
+    await session.commit()
+    logger.info("persist.dataset_created id=%s name=%s", ds.id, ds.name)
+    return ds.id
 
 
 class PersistResult:
@@ -59,59 +82,29 @@ async def persist(
     session: AsyncSession,
     result: IngestResult,
     *,
-    dataset_id: uuid.UUID | None = None,
-    create_dataset: bool = False,
-    dataset_name: str | None = None,
+    dataset_id: uuid.UUID,
     embedder: Embeddings | None = None,
 ) -> PersistResult:
-    """把 `IngestResult.chunks` 写入 PG。
+    """把 `IngestResult.chunks` 写入 PG。``dataset_id`` 必传。
 
     Args:
         session: 外部注入的 SQLAlchemy 异步会话。
-        result: `IngestPipeline.ingest()` 输出。
-        dataset_id: 落库目标 dataset 的 UUID; 与 `create_dataset` 二选一。
-        create_dataset: True 时按 `dataset_name` 新建 dataset (需同时给 `dataset_name`)。
-        dataset_name: 新建 dataset 的展示名 (仅 `create_dataset=True` 时使用)。
+        result: `IngestPipeline._process()` 输出。
+        dataset_id: 落库目标 dataset 的 UUID (由 pipeline 顶部解析)。
         embedder: 可选 LangChain `Embeddings`; 缺省时按 `settings.openai_embedding_*` 自动构造。
 
     Returns:
         `PersistResult`, 含 dataset_id 与新旧 chunk 数。
 
     Raises:
-        RAGError: 参数错配 (dataset_id 与 create_dataset 都没给/都给了),
-            或 dataset_id 不存在。
+        RAGError: dataset_id 不存在。
     """
-    if (dataset_id is None) == (not create_dataset):
-        raise RAGError(
-            code=IngestErrorCode.PERSIST_INVALID_ARGS,
-            message="必须传 --dataset-id 或 --create-dataset 之一",
-        )
-    if create_dataset and not dataset_name:
-        raise RAGError(
-            code=IngestErrorCode.PERSIST_INVALID_ARGS,
-            message="--create-dataset 必须配 --dataset-name",
-        )
-
     dataset_repo = DatasetRepository(session)
-
-    # 1. 解析 dataset
-    if dataset_id is not None:
-        ds = await dataset_repo.get_by_id(dataset_id)
-        if ds is None:
-            raise RAGError(
-                code=IngestErrorCode.PERSIST_DATASET_NOT_FOUND,
-                message=f"dataset_id {dataset_id} 不存在或已软删除",
-            )
-    else:
-        ds = await dataset_repo.create(
-            name=dataset_name,  # type: ignore[arg-type]
-            embed_model=settings.openai_embedding_model,
-            embed_dim=settings.openai_embedding_dim,
-        )
-        logger.info(
-            "persist.dataset_created id=%s name=%s",
-            ds.id,
-            ds.name,
+    ds = await dataset_repo.get_by_id(dataset_id)
+    if ds is None:
+        raise RAGError(
+            code=IngestErrorCode.PERSIST_DATASET_NOT_FOUND,
+            message=f"dataset_id {dataset_id} 不存在或已软删除",
         )
 
     # 2. 批量 embedding
@@ -134,8 +127,7 @@ async def persist(
             message=f"embedding 失败: {e!r}",
         ) from e
 
-    # 3. 构造 domain.document.Chunk
-    datasource = result.doc_meta.stored_datasource()
+    # 3. 构造 domain.document.Chunk (file ingest 落库语义固定为 file)
     filename = result.doc_meta.filename
     domain_chunks: list[DomainChunk] = [
         _build_domain_chunk(
@@ -143,7 +135,6 @@ async def persist(
             dataset_id=ds.id,
             embedding=emb,
             filename=filename,
-            datasource=datasource,
         )
         for c, emb in zip(chunks, embeddings, strict=True)
     ]
@@ -179,7 +170,6 @@ def _build_domain_chunk(
     dataset_id: uuid.UUID,
     embedding: list[float],
     filename: str | None,
-    datasource: StoredDatasource,
 ) -> DomainChunk:
     """ingest.types.Chunk + dataset_id + embedding -> domain.document.Chunk。"""
     meta: IngestChunkMetadata = ingest_chunk.metadata
@@ -194,7 +184,7 @@ def _build_domain_chunk(
         embedding=embedding,
         metadata=DomainChunkMetadata(
             dataset_id=dataset_id,
-            datasource=datasource,
+            datasource="file",
             filename=filename,
             parent_title=meta.heading_stack[0] if meta.heading_stack else "",
             chunk_index=meta.chunk_index,

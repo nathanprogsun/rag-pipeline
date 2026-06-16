@@ -98,8 +98,6 @@ async def read_url(
     return await dispatch_bytes(
         buffer=buffer,
         extension=extension,
-        source=final_url,
-        datasource="url",
         filename=filename_from_url(final_url),
         encoding=encoding,
     )

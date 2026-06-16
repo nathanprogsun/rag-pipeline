@@ -1,19 +1,19 @@
-"""Chunker 主入口: 文本规范化 -> 规则切分 -> 收尾合并 -> 组装 `Chunk`。
-
-旧 API `split_str` 仍保留以兼容旧调用方。
-"""
+"""Chunker 主入口: 文本规范化 -> 规则切分 -> 收尾合并 -> 组装 `Chunk`"""
 
 from __future__ import annotations
 
 import logging
 import re
 
-# TODO: 若缺失, 将 tqdm 加入 pyproject.toml 依赖。
-from rag.ingest.chunker.types import ChunkContext
+from rag.ingest.chunker._heading_re import collect_headings
 from rag.ingest.chunker.utils import valid_len
-from rag.ingest.types import Chunk, ChunkMetadata
+from rag.ingest.types import Chunk, ChunkMetadata, DocMeta
 
-from .code_block import protect_code_block
+from .code_block import (
+    CODE_FENCE_RE,
+    HTML_PRE_CODE_RE,
+    protect_code_block,
+)
 from .finalize import enforce_max_size, merge_chunks_to_target, merge_small_chunks
 from .recursive import common_split
 from .rules import CUSTOM_SPLIT_SIGN, build_steps
@@ -31,12 +31,9 @@ _ASCII_PUNCT_BETWEEN_CN_RE = re.compile(r"([一-鿿])([!?,;.])([一-鿿])")
 _PRESPLIT_RE = re.compile(r"(\n\n|。|！|？|；|，|[!?,;.])(?=\S)")
 
 # per-chunk 检测正则
-# 代码 fence (是否完整跨 chunk 不影响) 或 HTML <pre><code>。
-_CODE_FENCE_RE = re.compile(r"```|~~~")
-_HTML_PRE_CODE_RE = re.compile(r"<pre\b[\s\S]*?<code\b", re.IGNORECASE)
+# 代码 fence (是否完整跨 chunk 不影响) 或 HTML <pre><code> 已移至 code_block.py 复用。
 _TABLE_RE = re.compile(r"(?:^\|.+\|$\n?)+", re.MULTILINE)
 _HTML_TABLE_RE = re.compile(r"<table\b[\s\S]*?</table>", re.IGNORECASE)
-# 标题正则已移至 `_heading_re.py`
 # Markdown 与 HTML 形式的图片引用。
 _IMAGE_REF_RE = re.compile(
     r"!\[[^\]]*\]\([^)]+\)|<img\b[^>]*src=[\"']([^\"']+)[\"']", re.IGNORECASE
@@ -44,26 +41,12 @@ _IMAGE_REF_RE = re.compile(
 
 
 def _normalize_ascii_punct(text: str) -> str:
-    """在中文之间的 ASCII 标点两侧补空格, 便于切分规则匹配。
-
-    Args:
-        text: 原始文本。
-
-    Returns:
-        标点两侧已加空格的文本。
-    """
+    """在中文之间的 ASCII 标点两侧补空格, 便于切分规则匹配。"""
     return _ASCII_PUNCT_BETWEEN_CN_RE.sub(r"\1\2 \3", text)
 
 
 def _pre_split(text: str) -> list[str]:
-    """顶层预切: 按双换行或中英标点切分, 切点保留为独立 segment。
-
-    Args:
-        text: 待切分文本。
-
-    Returns:
-        非空 segment 列表; 空文本返回空列表。
-    """
+    """顶层预切: 按双换行或中英标点切分, 切点保留为独立 segment。"""
     if not text.strip():
         return []
     parts = _PRESPLIT_RE.split(text)
@@ -73,16 +56,10 @@ def _pre_split(text: str) -> list[str]:
 def _heading_stack_for_chunk(chunk_text: str) -> list[str]:
     """从 chunk 文本自身重建 heading 栈, 不依赖 doc-level 结构。
 
-    Args:
-        chunk_text: 单个 chunk 的文本。
-
-    Returns:
-        `['# Title', ...]` 形式的 heading 序列。
+    NOTE: chunk 边界可能截断 heading 链, 这是"per-chunk 重建"的固有 trade-off。
     """
     if not chunk_text or not chunk_text.strip():
         return []
-
-    from rag.ingest.chunker._heading_re import collect_headings  # noqa: PLC0415
 
     hits = collect_headings(chunk_text)
     stack: list[tuple[int, str]] = []
@@ -94,30 +71,16 @@ def _heading_stack_for_chunk(chunk_text: str) -> list[str]:
 
 
 def _has_code_in(text: str) -> bool:
-    """判断文本是否含代码 fence 或 HTML `<pre><code>` 块。
-
-    Args:
-        text: 待检测文本。
-
-    Returns:
-        包含代码即返回 True。
-    """
-    if _CODE_FENCE_RE.search(text):
+    """判断文本是否含代码 fence 或 HTML `<pre><code>` 块。"""
+    if CODE_FENCE_RE.search(text):
         return True
-    if _HTML_PRE_CODE_RE.search(text):
+    if HTML_PRE_CODE_RE.search(text):
         return True
     return False
 
 
 def _has_table_in(text: str) -> bool:
-    """判断文本是否含 Markdown pipe 表或 HTML `<table>`。
-
-    Args:
-        text: 待检测文本。
-
-    Returns:
-        包含表格即返回 True。
-    """
+    """判断文本是否含 Markdown pipe 表或 HTML `<table>`。"""
     if str_is_md_table(text):
         return True
     if _TABLE_RE.search(text):
@@ -128,14 +91,7 @@ def _has_table_in(text: str) -> bool:
 
 
 def _image_refs_in(text: str) -> list[str]:
-    """抽取文本中的图片引用 URL, 去重并保留首次出现顺序。
-
-    Args:
-        text: 待检测文本。
-
-    Returns:
-        URL 列表。
-    """
+    """抽取文本中的图片引用 URL, 去重并保留首次出现顺序。"""
     seen: set[str] = set()
     out: list[str] = []
     for m in _IMAGE_REF_RE.finditer(text):
@@ -145,6 +101,15 @@ def _image_refs_in(text: str) -> list[str]:
             seen.add(url)
             out.append(url)
     return out
+
+
+def _guess_file_type(meta: DocMeta) -> str:
+    """从 ``meta`` 推断 ``file_type``: 优先取文件名后缀, 否则取 ``mime`` 子类型。"""
+    if meta.filename and "." in meta.filename:
+        return meta.filename.rsplit(".", 1)[-1].lower()
+    if meta.mime:
+        return meta.mime.split("/")[-1].lower()
+    return ""
 
 
 class Chunker:
@@ -161,11 +126,11 @@ class Chunker:
         self,
         text: str,
         *,
-        ctx: ChunkContext | None = None,
+        meta: DocMeta | None = None,
         format_text: str | None = None,
         get_format_text: bool = True,
     ) -> list[Chunk]:
-        """主入口: 文本 + 上下文 -> `Chunk` 列表。
+        """主入口: 文本 + 文档元信息 -> `Chunk` 列表。
 
         `format_text` (如有) 与 `text` 用同一规则并行切分, 按 `chunk_index` 对齐
         回填到 `Chunk.raw_text` / `Chunk.format_text`; `get_format_text` 控制
@@ -173,7 +138,8 @@ class Chunker:
 
         Args:
             text: 已过 Normalizer 的原始文本。
-            ctx: 可选 `ChunkContext`, 用于注入 doc-level 字段到 metadata。
+            meta: 上游 ``DocMeta`` (含 filename / mime / encoding / page_count),
+                None 时使用空 DocMeta, doc-level 字段会取默认值。
             format_text: 可选, csv/xlsx adapter 提供的 markdown table 视图。
             get_format_text: `True` (默认) 时 `Chunk.text` 取 `format_text` 优先,
                 `False` 时始终取 `raw_text`。
@@ -182,6 +148,7 @@ class Chunker:
             切分得到的 `Chunk` 列表, 含位置、doc-level 与 per-chunk 现场重算
             的 heading/code/table/image 标记。
         """
+        # 步骤 1: 空文本直接返回空列表
         if not text or not text.strip():
             return []
 
@@ -191,17 +158,25 @@ class Chunker:
             bool(format_text),
             get_format_text,
         )
+        # 步骤 2: 切分主流程
         raw = self._split_legacy(text)
         if not raw:
             return []
 
-        # format_text 与 raw_text 用同一规则并行切, 按 chunk_index 对齐;
+        # 步骤 3: format_text 与 raw_text 用同一规则并行切, 按 chunk_index 对齐;
         # 数量不一致时取较大者, 缺失侧填空串。
         fmt: list[str] = []
         if format_text:
             fmt = self._split_legacy(format_text)
 
-        context = ctx or ChunkContext.empty()
+        # 步骤 4: 解析 doc-level 字段 (空 DocMeta 时全取默认)
+        doc = meta or DocMeta()
+        source = doc.filename or ""
+        file_type = _guess_file_type(doc)
+        page_count = doc.page_count
+        encoding = doc.encoding
+
+        # 步骤 5: 组装 Chunk
         n = max(len(raw), len(fmt))
         out: list[Chunk] = []
         for i in range(n):
@@ -224,10 +199,10 @@ class Chunker:
                         total_chunks=n,
                         valid_len=valid_len(restored),
                         # doc-level 字段
-                        source=context.source,
-                        file_type=context.file_type,
-                        page_count=context.page_count,
-                        encoding=context.encoding,
+                        source=source,
+                        file_type=file_type,
+                        page_count=page_count,
+                        encoding=encoding,
                         # per-chunk 现场重算
                         heading_stack=_heading_stack_for_chunk(restored),
                         has_code=_has_code_in(restored),
@@ -253,8 +228,12 @@ class Chunker:
     def _split_legacy(self, text: str) -> list[str]:
         """原 `split` 实现, 返回 `list[str]`, 供 `split` / `split_str` 复用。
 
-        流程: 规范化 -> 代码块保护 -> 自定义 separator 优先 -> 按
-        `CUSTOM_SPLIT_SIGN` 切段 -> `_finalize` 合并收尾。
+        步骤:
+            1. 规范化文本 (simple_text)。
+            2. 保护代码块 (protect_code_block)。
+            3. 若配置 custom_separator, 按用户正则切分后直接 finalize 返回。
+            4. 否则按 ``CUSTOM_SPLIT_SIGN`` 占位符切大段, 每段走 ``_split_segment``。
+            5. 全部走 ``_finalize`` 收尾。
         """
         if not text or not text.strip():
             return []
@@ -286,21 +265,33 @@ class Chunker:
             return []
         return parts
 
+    def _build_rules(self) -> list:
+        """构造 Rule 列表 (供 ``_split_segment`` / ``_split_long`` / overlap 共用)。"""
+        return build_steps(
+            chunk_size=self.s.chunk_size,
+            max_size=self.s.max_chunk_size,
+            paragraph_chunk_deep=self.s.paragraph_chunk_deep,
+        )
+
     def _split_segment(self, seg: str) -> list[str]:
-        """对单段执行顶层预切 + 递归切分, 短段跳过预切避免被切碎。"""
+        """对单段执行顶层预切 + 递归切分, 短段跳过预切避免被切碎。
+
+        步骤:
+            1. ``_normalize_ascii_punct``: 中文字之间的 ASCII 标点两侧补空格。
+            2. 短段 (valid_len <= chunk_size) 跳过预切, 直接 ``_split_long``。
+            3. ``_pre_split`` 按 ``\\n\\n`` / 中英标点拆出 parts。
+            4. 决定分支:
+               - ``valid_len(p) > chunk_size`` -> 走 ``common_split`` 递归
+               - 否则原样 append
+        """
         seg = _normalize_ascii_punct(seg)
-        # 短段不预切标点, 避免整段被切成单句。
         if valid_len(seg) <= self.s.chunk_size:
             return self._split_long(seg)
         parts = _pre_split(seg)
         if len(parts) <= 1:
             return self._split_long(seg)
 
-        rules = build_steps(
-            chunk_size=self.s.chunk_size,
-            max_size=self.s.max_chunk_size,
-            paragraph_chunk_deep=self.s.paragraph_chunk_deep,
-        )
+        rules = self._build_rules()
         overlap_len = int(self.s.chunk_size * self.s.overlap_ratio)
 
         result: list[str] = []
@@ -324,12 +315,14 @@ class Chunker:
         return result
 
     def _split_long(self, seg: str) -> list[str]:
-        """对超长段直接进入递归切分。"""
-        rules = build_steps(
-            chunk_size=self.s.chunk_size,
-            max_size=self.s.max_chunk_size,
-            paragraph_chunk_deep=self.s.paragraph_chunk_deep,
-        )
+        """对超长段直接进入递归切分。
+
+        步骤:
+            1. 构造 rules。
+            2. 算 overlap_len = chunk_size * overlap_ratio。
+            3. 委托 common_split 从 step=0 开始递归。
+        """
+        rules = self._build_rules()
         overlap_len = int(self.s.chunk_size * self.s.overlap_ratio)
 
         return common_split(
@@ -345,7 +338,16 @@ class Chunker:
         )
 
     def _finalize(self, chunks: list[str]) -> list[str]:
-        """收尾: 还原代码块 marker, 合并小块, 强制不超 `max_size`。"""
+        """收尾: 还原代码块 marker, 合并小块, 强制不超 `max_size`。
+
+        步骤:
+            1. 还原代码块 marker, 过滤空白段。
+            2. 小块捷径: 若只剩 1-3 块且都 < min_chunk_size, 只 strip 就返回。
+            3. ``merge_small_chunks``: 向前/后合并小段。
+            4. ``merge_chunks_to_target``: 贴 chunk_size, 不超 max_chunk_size。
+            5. ``enforce_max_size``: 仍超 max 的走 sliding_window 兜底。
+            6. 末尾 strip + 过滤空段。
+        """
         chunks = [restore_code_block_marker(c) for c in chunks]
         chunks = [c for c in chunks if c.strip()]
         small = [c for c in chunks if len(c) < self.s.min_chunk_size]

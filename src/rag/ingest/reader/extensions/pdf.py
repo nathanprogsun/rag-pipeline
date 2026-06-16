@@ -62,7 +62,6 @@ async def pdf_adapter(
         images=[],
         extras={},
         meta=DocMeta(
-            datasource="file",  # 占位, dispatch 覆盖
             mime=PDF_MIME,
             encoding=encoding,  # 保留传入, postprocess 按 utf-8 处理
             size_bytes=len(buffer),

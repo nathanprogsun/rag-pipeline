@@ -11,6 +11,8 @@ from enum import StrEnum
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, Field
 
+from rag.infra.llm.semaphore import llm_sem
+from rag.infra.llm.tokenizer import count_tokens
 from rag.ingest.normalizer.base import Normalizer
 from rag.ingest.types import DocMeta, TextDoc
 
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 # 截断 / 超时常量
 MAX_INPUT_CHARS: int = 50_000
 _LLM_TIMEOUT_SEC: float = 600.0
+_LLM_MAX_ATTEMPTS: int = 3
 
 # 至少 2 个 markdown 标题才算"已结构化"
 _HEADING_RE: re.Pattern[str] = re.compile(r"^#{1,5}\s+\S+", re.MULTILINE)
@@ -65,7 +68,8 @@ _SYSTEM_PROMPT = """你是一名技术文档编辑。把用户提供的非结构
 要求:
 1. 使用 # / ## / ### 三级标题分章节, 保留原文事实, 不总结不删改。
 2. 代码块、列表、表格保留原始语义, 无法识别时保持纯文本。
-3. 只输出 Markdown 正文, 不要任何解释或前言。"""
+3. 只输出 Markdown 正文, 不要任何解释或前言。
+4. 必须调用 StructuredText 工具提交 result_text; 禁止仅以思考/分析结束而不调用工具。"""
 
 
 _HUMAN_TEMPLATE = """请把下面的文本重整为 Markdown 章节。
@@ -135,7 +139,6 @@ class StructureNormalizer(Normalizer):
         self._max_input_chars = max_input_chars
         self._llm_timeout_sec = llm_timeout_sec
 
-    # ── 公共 API (async, 沿用 Normalizer 基类签名) ─────────────────────
     async def normalize(self, doc: TextDoc) -> TextDoc:
         filename = doc.meta.filename
         logger.info(
@@ -144,7 +147,7 @@ class StructureNormalizer(Normalizer):
             self._mode,
             len(doc.text),
         )
-        result = await self._run_pipeline(doc.text)
+        result = await self.process(doc.text)
         self._report(result, meta=doc.meta, mode=self._mode)
         return TextDoc(
             text=result.result_text,
@@ -153,20 +156,7 @@ class StructureNormalizer(Normalizer):
             images=list(doc.images),
         )
 
-    # ── 测试入口: 暴露 ResultDocument (内部结果) ──────────────────────
-    async def normalize_with_result(self, doc: TextDoc) -> ResultDocument:
-        """返回 ResultDocument, 仅供测试断言 skipped / degraded / tokens。
-
-        Args:
-            doc: 输入文档。
-
-        Returns:
-            ResultDocument, 含跳过/降级/tokens 等内部结果。
-        """
-        return await self._run_pipeline(doc.text)
-
-    # ── 三道闸门主流程 ────────────────────────────────────────────────
-    async def _run_pipeline(self, raw_text: str) -> ResultDocument:
+    async def process(self, raw_text: str) -> ResultDocument:
         # 闸门 1: 显式禁用 或 没有 chat_model → 跳过
         if self._mode is StructureMode.FORBID or self._chat_model is None:
             return ResultDocument(
@@ -210,29 +200,76 @@ class StructureNormalizer(Normalizer):
     async def _invoke_llm(self, raw_text: str) -> ResultDocument:
         truncated = self._truncate(raw_text)
         prompt = self._build_prompt(truncated)
+        input_chars = len(truncated)
+        last_reason: str | None = None
         try:
-            parsed = await asyncio.wait_for(
-                self._chat_model.ainvoke(prompt),  # type: ignore[union-attr]
-                timeout=self._llm_timeout_sec,
+            for attempt in range(1, _LLM_MAX_ATTEMPTS + 1):
+                out = await asyncio.wait_for(
+                    llm_sem.run(
+                        "chat",
+                        self._chat_model.ainvoke(prompt),  # type: ignore[union-attr]
+                    ),
+                    timeout=self._llm_timeout_sec,
+                )
+                parsed, last_reason = _extract_structured_result(out)
+                if parsed is not None:
+                    if attempt > 1:
+                        logger.info(
+                            "structure.llm_retry_ok chars=%d attempt=%d",
+                            input_chars,
+                            attempt,
+                        )
+                    return ResultDocument(
+                        result_text=parsed.result_text,
+                        raw_text=raw_text,
+                        input_tokens=count_tokens(truncated),
+                        output_tokens=count_tokens(parsed.result_text),
+                        skipped=False,
+                        degraded=False,
+                    )
+                logger.warning(
+                    "structure.llm_no_tool_call chars=%d attempt=%d/%d reason=%s",
+                    input_chars,
+                    attempt,
+                    _LLM_MAX_ATTEMPTS,
+                    last_reason,
+                )
+                if attempt < _LLM_MAX_ATTEMPTS:
+                    await asyncio.sleep(0.5 * attempt)
+            logger.warning(
+                "structure.llm_exhausted_retries chars=%d attempts=%d last_reason=%s",
+                input_chars,
+                _LLM_MAX_ATTEMPTS,
+                last_reason,
             )
-            return ResultDocument(
-                result_text=parsed.result_text,
-                raw_text=raw_text,
-                input_tokens=len(truncated) // 4,
-                output_tokens=len(parsed.result_text) // 4,
-                skipped=False,
-                degraded=False,
+            return self._degraded_result(raw_text)
+        except TimeoutError as exc:
+            logger.warning(
+                "structure.llm_timeout chars=%d timeout_sec=%.0f err=%s",
+                input_chars,
+                self._llm_timeout_sec,
+                exc,
             )
+            return self._degraded_result(raw_text)
         except Exception as exc:  # noqa: BLE001 — 降级路径吞所有异常
-            logger.warning("StructureNormalizer LLM failed, degrading: %s", exc)
-            return ResultDocument(
-                result_text=raw_text,
-                raw_text=raw_text,
-                input_tokens=0,
-                output_tokens=0,
-                skipped=False,
-                degraded=True,
+            logger.warning(
+                "structure.llm_error chars=%d err_type=%s err=%s",
+                input_chars,
+                type(exc).__name__,
+                exc,
             )
+            return self._degraded_result(raw_text)
+
+    @staticmethod
+    def _degraded_result(raw_text: str) -> ResultDocument:
+        return ResultDocument(
+            result_text=raw_text,
+            raw_text=raw_text,
+            input_tokens=0,
+            output_tokens=0,
+            skipped=False,
+            degraded=True,
+        )
 
     def _truncate(self, text: str) -> str:
         if len(text) <= self._max_input_chars:
@@ -277,3 +314,37 @@ class StructureNormalizer(Normalizer):
                 result.input_tokens,
                 result.output_tokens,
             )
+
+
+def _extract_structured_result(
+    out: object,
+) -> tuple[StructuredText | None, str]:
+    """从 `with_structured_output` 返回值解析 `StructuredText` 与失败原因。"""
+    if out is None:
+        return None, "structured_output_returned_none"
+    if isinstance(out, StructuredText):
+        return out, "ok"
+    if isinstance(out, dict):
+        parsed = out.get("parsed")
+        if isinstance(parsed, StructuredText):
+            return parsed, "ok"
+        parsing_error = out.get("parsing_error")
+        if parsing_error is not None:
+            return None, f"parsing_error={parsing_error!s}"
+        raw = out.get("raw")
+        finish_reason: str | None = None
+        tool_call_count = 0
+        if raw is not None:
+            meta = getattr(raw, "response_metadata", None) or {}
+            finish_reason = meta.get("finish_reason")
+            tool_call_count = len(getattr(raw, "tool_calls", None) or [])
+        if finish_reason == "stop" and tool_call_count == 0:
+            return (
+                None,
+                "finish_reason=stop without tool_calls (reasoning-only response)",
+            )
+        return (
+            None,
+            f"finish_reason={finish_reason!r} tool_calls={tool_call_count}",
+        )
+    return None, f"unexpected_type={type(out).__name__}"

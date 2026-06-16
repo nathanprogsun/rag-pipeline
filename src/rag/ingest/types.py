@@ -106,11 +106,15 @@ class IngestOutcome:
 
 
 class PersistConfig(BaseModel):
+    """持久化配置。
+
+    ``dataset_id`` 与 ``create_dataset`` 二选一:
+    - ``dataset_id``: 复用已存在 dataset。
+    - ``create_dataset=True``: 与 ``dataset_name`` 一起新建 dataset。
+        ``ingest_many`` 入口解析 dataset 后, 此标志不再改变。
+    """
+
     dataset_id: uuid.UUID | None = Field(default=None)
     create_dataset: bool = Field(default=False)
     dataset_name: str | None = Field(default=None)
     enabled: bool = Field(default=False)
-
-    def adopt(self, dataset_id: uuid.UUID) -> None:
-        self.dataset_id = dataset_id
-        self.create_dataset = False

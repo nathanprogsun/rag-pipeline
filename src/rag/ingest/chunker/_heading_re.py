@@ -1,7 +1,4 @@
-"""Markdown / HTML 标题抽取工具。
-
-合并 ``ingest/pipeline.py`` 与 ``ingest/chunker/core.py`` 中各自维护的标题正则。
-"""
+"""Markdown / HTML 标题抽取工具。"""
 
 from __future__ import annotations
 

@@ -23,6 +23,20 @@ def common_split(
 ) -> list[str]:
     """按 `rules[step]` 递归切分, 累积 `last_text` 直至触发 flush。
 
+    步骤:
+        1. 终止条件: step >= len(rules) -> 合并 last_text 后硬切 (sliding_window)。
+        2. 取 rule = rules[step], 切出 segments。
+        3. flush_threshold = min(paragraph_chunk_min_size, chunk_size)。
+        4. 遍历 segments:
+            4a. heading 规则: 强制下钻, 累加 parent_title。
+            4b. 拼接超长:
+                - 略超 (1.2x 内): 成块 + 取 overlap tail 当作下个块的 last_text。
+                - 远超: 下钻, 把 inner[:-1] 拼入, 末段按 flush_threshold 决定 flush / 保留。
+            4c. 未超长:
+                - forbid_overlap: 直接成块。
+                - 否则: 累积到 last_text。
+        5. 收尾: 残余 last_text 太小并入上一块, 否则自成一块。
+
     Args:
         text: 当前待切分文本。
         step: 当前规则层级的索引。
@@ -37,7 +51,7 @@ def common_split(
     Returns:
         切分得到的 chunk 列表。
     """
-    # 递归终止: 规则用尽时做硬切兜底。
+    # 步骤 1: 递归终止 -> 硬切兜底
     if step >= len(rules):
         combined = last_text + text
         if valid_len(combined) < max_size:
@@ -47,13 +61,13 @@ def common_split(
     rule = rules[step]
     segments = _apply_rule(text, rule)
 
-    # 阈值必须夹在 chunk_size 之内, 否则末段累积永远不 flush, 会越界。
+    # 步骤 3: 阈值必须夹在 chunk_size 之内, 否则末段累积永远不 flush, 会越界
     flush_threshold = min(paragraph_chunk_min_size, chunk_size)
 
     chunks: list[str] = []
 
     for seg_text, seg_title in segments:
-        # heading 规则: 强制下钻一层, 累加 parent_title。
+        # 步骤 4a: heading 规则 -> 强制下钻, 累加 parent_title
         if rule.reg.startswith(r"^(") and "#" in rule.reg[:6]:
             new_parent = parent_title + seg_title if seg_title else parent_title
             inner = common_split(
@@ -70,19 +84,24 @@ def common_split(
             chunks.extend(inner)
             continue
 
-        # 容量判断: 拼接后长度 vs 规则上限。
+        # 步骤 4b/4c: 容量判断
         new_text = (last_text + seg_text) if last_text else seg_text
         new_len = valid_len(new_text)
 
         if new_len > rule.max_len:
-            # 略超规则上限, 直接成块并准备 overlap 尾。
+            # 4b-i. 略超规则上限, 直接成块并准备 overlap 尾
             if new_len < int(rule.max_len * 1.2):
                 chunks.append(new_text)
                 last_text = get_overlap_tail(
-                    new_text, step, chunk_size, overlap_len, int(chunk_size * 0.4)
+                    new_text,
+                    step,
+                    rules,
+                    chunk_size,
+                    overlap_len,
+                    int(chunk_size * 0.4),
                 )
             else:
-                # 远超上限, 递归下钻。
+                # 4b-ii. 远超上限, 递归下钻
                 inner = common_split(
                     text=seg_text,
                     step=step + 1,
@@ -102,13 +121,13 @@ def common_split(
                 else:
                     last_text = last
         else:
-            # 在规则上限内: 按规则决定直接成块或继续累积。
+            # 4c. 在规则上限内: 按规则决定直接成块或继续累积
             if rule.forbid_overlap:
                 chunks.append(seg_text)
             else:
                 last_text = new_text
 
-    # 残余 last_text 收尾: 太小则并入上一块, 否则自成一块。
+    # 步骤 5: 残余 last_text 收尾 -> 太小则并入上一块, 否则自成一块
     if last_text:
         if chunks and valid_len(last_text) < flush_threshold:
             chunks[-1] = chunks[-1] + last_text
@@ -122,13 +141,6 @@ def _apply_rule(text: str, rule: Rule) -> list[tuple[str, str]]:
     """按 `rule.reg` 切分文本, 返回 `(text, title)` 列表。
 
     heading 规则的 match 段会被视作 title, 普通 split 规则则保留原文片段。
-
-    Args:
-        text: 待切分文本。
-        rule: 切分规则。
-
-    Returns:
-        `(text, title)` 元组列表, 无匹配时返回单元素。
     """
     parts = re.split(rule.reg, text)
     if len(parts) <= 1:
@@ -139,7 +151,7 @@ def _apply_rule(text: str, rule: Rule) -> list[tuple[str, str]]:
         if not p.strip():
             continue
         if i % 2 == 1:
-            # match 部分: heading 规则取为 title, 其他规则保留原文。
+            # match 部分: heading 规则取为 title, 其他规则保留原文
             if rule.reg.startswith(r"^(") and "#" in rule.reg[:6]:
                 result.append(("", p.strip()))
             else:

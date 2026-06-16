@@ -81,8 +81,6 @@ def read_file(path: str | Path) -> TextDoc:
         dispatch_bytes(
             buffer=buffer,
             extension=p.suffix,
-            source=f"file://{p.resolve()}",
-            datasource="file",
             filename=p.name,
         )
     )

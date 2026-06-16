@@ -149,7 +149,6 @@ async def docx_adapter(
         raw_text=markdown,
         format_text=None,
         meta=DocMeta(
-            datasource="file",  # 占位, dispatch 覆盖
             mime=DOCX_MIME,
             encoding=encoding,
             size_bytes=len(buffer),
