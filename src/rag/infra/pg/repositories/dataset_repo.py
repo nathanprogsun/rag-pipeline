@@ -38,6 +38,75 @@ class DatasetRepository:
         """
         self.session = session
 
+    async def get_by_id(
+        self, dataset_id: uuid.UUID, *, include_deleted: bool = False
+    ) -> DatasetModel | None:
+        """按 UUID 取 dataset; 不存在或已软删返回 None。
+
+        Args:
+            dataset_id: dataset UUID。
+            include_deleted: True 时返回软删除的 dataset, False 时过滤。
+
+        Returns:
+            `DatasetModel` 或 None。
+        """
+        stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
+        if not include_deleted:
+            stmt = stmt.where(DatasetModel.deleted_at.is_(None))
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create(
+        self,
+        *,
+        name: str,
+        embed_model: str,
+        embed_dim: int,
+        chunk_size: int = 1000,
+        rerank_model: str | None = None,
+        rrf_k: int = 60,
+        vector_weight: float = 0.7,
+        fulltext_weight: float = 0.3,
+        query_select_alpha: float = 0.3,
+        prompt_template: str = "",
+        system_prompt: str | None = None,
+    ) -> DatasetModel:
+        """新建 dataset 行, `flush()` 但不 `commit()`。
+
+        业务方负责 commit / rollback。返回新建的 ORM 实例。
+
+        Args:
+            name: dataset 展示名 (需 unique, 但此处不强制; 由调用方决定)。
+            embed_model: 用于此 dataset 的 embedding 模型名。
+            embed_dim: embedding 维度, 需与 `chunks.embedding` 列维度一致。
+            chunk_size: 默认 chunk 大小 (记录下来, 给后续 chunker 提示)。
+            rerank_model: 可选 rerank 模型。
+            rrf_k: RRF k 常量。
+            vector_weight / fulltext_weight: 融合权重。
+            query_select_alpha: submodular α。
+            prompt_template: 提示模板, 默认空 (上层用 DEFAULT_PROMPT_TEMPLATE)。
+            system_prompt: 系统提示, 可空。
+
+        Returns:
+            新建的 `DatasetModel` (含自动生成的 id)。
+        """
+        model = DatasetModel(
+            name=name,
+            embed_model=embed_model,
+            embed_dim=embed_dim,
+            chunk_size=chunk_size,
+            rerank_model=rerank_model,
+            rrf_k=rrf_k,
+            vector_weight=vector_weight,
+            fulltext_weight=fulltext_weight,
+            query_select_alpha=query_select_alpha,
+            prompt_template=prompt_template,
+            system_prompt=system_prompt,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return model
+
     async def list(
         self,
         *,
@@ -74,9 +143,7 @@ class DatasetRepository:
                 DatasetModel.created_at,
                 func.coalesce(chunk_count_sq.c.n, 0).label("chunk_count"),
             )
-            .outerjoin(
-                chunk_count_sq, chunk_count_sq.c.dataset_id == DatasetModel.id
-            )
+            .outerjoin(chunk_count_sq, chunk_count_sq.c.dataset_id == DatasetModel.id)
             .order_by(DatasetModel.created_at.desc())
             .limit(limit)
             .offset(offset)

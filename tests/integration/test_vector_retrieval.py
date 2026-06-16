@@ -4,12 +4,12 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.vector_store import VectorRetriever
+from tests._fakes import ConstantEmbeddings
 
 EMBED_DIM = 1536
 
@@ -20,18 +20,11 @@ def _unit_vector(dim_index: int) -> list[float]:
     return vec
 
 
-class FakeEmbeddings(Embeddings):
-    async def aembed_query(self, text: str) -> list[float]:
-        return _unit_vector(0)
+_FAKE_EMB_VECTOR = _unit_vector(0)
 
-    def embed_query(self, text: str) -> list[float]:
-        return _unit_vector(0)
 
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [_unit_vector(0) for _ in texts]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [_unit_vector(0) for _ in texts]
+def _fake_embeddings() -> ConstantEmbeddings:
+    return ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 async def _create_dataset(db_session: AsyncSession) -> uuid.UUID:
@@ -66,7 +59,7 @@ async def test_hnsw_index_actually_used(db_session: AsyncSession) -> None:
         )
     await db_session.commit()
 
-    retriever = VectorRetriever(dataset_id=dataset_id, embed_model=FakeEmbeddings())
+    retriever = VectorRetriever(dataset_id=dataset_id, embed_model=_fake_embeddings())
     with patch(
         "rag.infra.pg.vector_store.AsyncSessionLocal",
         return_value=_session_context_manager(db_session),

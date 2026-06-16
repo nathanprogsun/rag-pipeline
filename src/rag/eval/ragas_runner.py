@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from rag.eval._jsonl import load_jsonl
 from rag.eval.metrics import aggregate_metric
 from rag.eval.ragas_metrics import (
     answer_relevance_stub,
@@ -90,7 +91,7 @@ class RagasRunner:
         output_path: Path | None = None,
     ) -> RagasSummary:
         """加载 JSONL, 计算 per-record 指标, 聚合, 可选写入 JSON。"""
-        records = _load_jsonl(dataset_path)
+        records = load_jsonl(dataset_path, RagasRecord)
         if not records:
             return RagasSummary(
                 sample_count=0, metric_aggregates={}, warnings=["empty dataset"]
@@ -143,20 +144,6 @@ class RagasRunner:
 
 
 # ---------- Helpers ----------
-
-
-def _load_jsonl(path: Path) -> list[RagasRecord]:
-    records: list[RagasRecord] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(RagasRecord.model_validate_json(line))
-            except Exception as e:
-                logger.warning("Skipping malformed ragas record: %r", e)
-    return records
 
 
 def _compute_ragas_metrics(

@@ -176,7 +176,8 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
-    if not query or not query.strip():
+    q = (query or "").strip()
+    if not q:
         _err_exit("query 不能为空")
     if not dataset_id:
         _err_exit("至少指定一个 --dataset-id")
@@ -209,7 +210,7 @@ def main(
     )
     pipeline = build_search_pipeline(deps)
     assert dataset_id is not None
-    req = SearchRequest(query=query, dataset_ids=list(dataset_id), audit=audit)
+    req = SearchRequest(query=q, dataset_ids=list(dataset_id), audit=audit)
 
     try:
         result = asyncio.run(pipeline.ainvoke(req))
@@ -217,11 +218,9 @@ def main(
         _err_exit(f"pipeline.ainvoke failed: {e!r}")
 
     if output.lower() == "json":
-        _emit_json(
-            query, req, result.response, result.citations, result._intermediate_hits
-        )
+        _emit_json(q, req, result.response, result.citations, result._intermediate_hits)
     else:
-        _emit_text(query, result.response, result.citations, result._intermediate_hits)
+        _emit_text(q, result.response, result.citations, result._intermediate_hits)
 
     if audit_tap is not None:
         typer.echo(f"(audit → {audit_tap.file_path})", err=True)

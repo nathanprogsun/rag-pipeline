@@ -33,21 +33,18 @@ import uuid
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rag.config import settings
-from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
-from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.search.orchestrator import SearchPipeline
-from rag.search.retrieve.subgraph import SearchSubgraph
+from tests.integration._db_helpers import (
+    create_dataset,
+    seed_chunks,
+)
+from tests.integration._retriever import make_subgraph
 
 # 真实 embedding 维度: 与 settings.openai_embedding_dim 对齐
-EMBED_DIM: int = settings.openai_embedding_dim
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +52,7 @@ EMBED_DIM: int = settings.openai_embedding_dim
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# 中文测试语料, 用于 _seed_chunks_with_real_embeddings
+# 中文测试语料, 用于 seed_chunks
 CORPUS_PYTHON: dict[str, list[str]] = {
     "python-tutorial": [
         "Python 是一门解释型、动态类型的高级编程语言, 语法简洁易读。",
@@ -75,55 +72,6 @@ CORPUS_PYTHON: dict[str, list[str]] = {
 }
 
 
-async def _create_dataset(
-    db_session: AsyncSession, name: str, *, embed_model: str | None = None
-) -> uuid.UUID:
-    """在真实 PG 中创建 dataset 行 (含真实 embed_model / embed_dim)。"""
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=embed_model or settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
-
-
-async def _seed_chunks_with_real_embeddings(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    """真实 embedding 入库: 用 live_embed_model 真实调 embedding API,
-    把结果作为 chunk 的 embedding 列。中文/英文统一处理。
-    """
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    assert len(embeddings) == len(texts)
-    chunks: list[ChunkModel] = []
-    for text_content, embedding in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(
-            dataset_id=dataset_id,
-            text=text_content,
-            embedding=embedding,
-        )
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    # 中文 tsvector 用 ChineseTokenizer 真实分词
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
-
-
 async def _seed_corpus(
     db_session: AsyncSession,
     *,
@@ -140,8 +88,8 @@ async def _seed_corpus(
     """
     ids: dict[str, uuid.UUID] = {}
     for ds_name, texts in dataset_specs.items():
-        ds_id = await _create_dataset(db_session, ds_name)
-        await _seed_chunks_with_real_embeddings(
+        ds_id = await create_dataset(db_session, ds_name)
+        await seed_chunks(
             db_session,
             dataset_id=ds_id,
             texts=texts,
@@ -153,114 +101,6 @@ async def _seed_corpus(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Runnable adapter: ChunkRepository → LangChain Runnable 契约
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class _RepoRetriever:
-    """Runnable adapter wrapping ChunkRepository for subgraph integration tests.
-
-    关键: 每次 ainvoke 都从 session_factory 新建 session (per-call session)
-    避免 asyncio.gather 多 retriever 共享 session 导致 transaction 冲突。
-    sync ``invoke`` 通过 ``run_coroutine_sync`` 桥接, 与
-    ``rag.infra.pg.vector_store.VectorRetriever`` 入口契约对齐。
-    """
-
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        dataset_id: uuid.UUID,
-        mode: str,
-        embed_model: Embeddings | None = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self.dataset_id = dataset_id
-        self.mode = mode
-        self.embed_model = embed_model
-
-    async def ainvoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        query = str(input["query"])
-        raw_top_k = input.get("top_k", 10)
-        top_k = raw_top_k if isinstance(raw_top_k, int) else 10
-
-        # 每个 retriever 独立 session: 避免 asyncio.gather 共享 transaction
-        async with self.session_factory() as session:
-            repo = ChunkRepository(session)
-            if self.mode == "vector":
-                assert self.embed_model is not None
-                query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
-            elif self.mode == "fulltext":
-                rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
-            else:
-                msg = f"unknown mode: {self.mode}"
-                raise ValueError(msg)
-
-            return [
-                ScoredDocument(
-                    chunk_id=chunk.id,
-                    dataset_id=chunk.dataset_id,
-                    text=chunk.text,
-                    score=score,
-                    rank=i,
-                    source=self.mode,  # type: ignore[arg-type]
-                    modality=chunk.modality,
-                    image_path=chunk.image_path,
-                    metadata=ChunkMetadata(
-                        dataset_id=chunk.dataset_id,
-                        datasource=chunk.metadata.datasource,
-                        filename=chunk.metadata.filename,
-                        parent_title=chunk.metadata.parent_title,
-                        chunk_index=chunk.metadata.chunk_index,
-                    ),
-                )
-                for i, (chunk, score) in enumerate(rows)
-            ]
-
-    def invoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        """sync 入口, 通过 run_coroutine_sync 桥接。"""
-        from rag.infra.pg.runnable_sync import run_coroutine_sync
-
-        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
-
-
-def _make_subgraph(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    dataset_id: uuid.UUID,
-    embed_model: Embeddings,
-    top_k: int = 10,
-) -> SearchSubgraph:
-    """构造真实 SearchSubgraph (vector + fulltext 双路)。"""
-    return SearchSubgraph(
-        dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="vector",
-            embed_model=embed_model,
-        ),
-        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="fulltext",
-        ),
-        top_k=top_k,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 真实场景测试
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -282,7 +122,7 @@ async def test_real_two_datasets_relevant_content(
         },
     )
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -322,15 +162,15 @@ async def test_real_dataset_isolation(
     orchestrator 的职责是: 跨 dataset 召回时, 每个 ScoredDocument.dataset_id
     都精确指向它被检索的 dataset, 不会发生 dataset_id 错位。
     """
-    ds_python = await _create_dataset(db_session, "ds-python-only")
-    ds_java = await _create_dataset(db_session, "ds-java-only")
-    py_chunks = await _seed_chunks_with_real_embeddings(
+    ds_python = await create_dataset(db_session, "ds-python-only")
+    ds_java = await create_dataset(db_session, "ds-java-only")
+    py_chunks = await seed_chunks(
         db_session,
         dataset_id=ds_python,
         texts=CORPUS_PYTHON["python-tutorial"],
         embed_model=live_embed_model,
     )
-    java_chunks = await _seed_chunks_with_real_embeddings(
+    java_chunks = await seed_chunks(
         db_session,
         dataset_id=ds_java,
         texts=CORPUS_PYTHON["java-tutorial"],
@@ -340,12 +180,12 @@ async def test_real_dataset_isolation(
     java_ids = {c.id for c in java_chunks}
 
     subgraphs = {
-        ds_python: _make_subgraph(
+        ds_python: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_python,
             embed_model=live_embed_model,
         ),
-        ds_java: _make_subgraph(
+        ds_java: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_java,
             embed_model=live_embed_model,
@@ -389,7 +229,7 @@ async def test_real_missing_dataset_tracked(
     missing_id = uuid.uuid4()  # 不创建, 不注册 subgraph
 
     subgraphs = {
-        registered_id: _make_subgraph(
+        registered_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=registered_id,
             embed_model=live_embed_model,
@@ -432,7 +272,7 @@ async def test_real_subgraph_exception_isolated(
         async def ainvoke(self, query: str) -> list[ScoredDocument]:
             raise RuntimeError("subgraph layer crashed")
 
-    survivor_subgraph = _make_subgraph(
+    survivor_subgraph = make_subgraph(
         session_factory=pg_session_factory,
         dataset_id=ids["ds-survivor"],
         embed_model=live_embed_model,
@@ -476,7 +316,7 @@ async def test_real_score_filter_drops_irrelevant(
         },
     )
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -538,7 +378,7 @@ async def test_real_token_budget_keeps_top(
         },
     )
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -577,7 +417,7 @@ async def test_real_intermediate_hits_excluded_from_json(
         },
     )
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -621,7 +461,7 @@ async def test_real_chinese_semantic_search(
         },
     )
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -676,7 +516,7 @@ async def test_real_with_cite_callback(
             ]
 
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -743,7 +583,7 @@ async def test_real_with_gen_callback(
         return " | ".join(summary_parts)
 
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -792,7 +632,7 @@ async def test_real_with_rerank_callback(
 
     rerank = ReverseRerank()
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,
@@ -855,7 +695,7 @@ async def test_real_full_chain_with_all_callbacks(
         return f"基于 {len(citations)} 条引用回答 query={req.query!r}"
 
     subgraphs = {
-        ds_id: _make_subgraph(
+        ds_id: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_id,
             embed_model=live_embed_model,

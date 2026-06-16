@@ -1,23 +1,29 @@
-"""``rag-ingest`` Typer CLI：本地文件 / URL → IngestPipeline → stdout。"""
+"""``rag-ingest`` Typer CLI: 本地文件 / URL → IngestPipeline → (可选) PG → stdout。"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from typing import Annotated, Final, Literal, cast
 
 import typer
+from langchain_core.embeddings import Embeddings
 
 from rag.config import settings
 from rag.error_codes import ConfigErrorCode
 from rag.exception import RAGError
 from rag.infra.llm.chat import get_structured_chat_model
+from rag.infra.llm.embed import get_embed_model
+from rag.infra.pg.database import AsyncSessionLocal
 from rag.ingest.chunker import Chunker
 from rag.ingest.chunker.quality import format_chunk_stats, measure_chunks
 from rag.ingest.chunker.settings import ChunkSettings
 from rag.ingest.normalizer import StructureMode, StructureNormalizer
 from rag.ingest.normalizer.structure import StructuredText
+from rag.ingest.persist import PersistResult
+from rag.ingest.persist import persist as persist_chunks
 from rag.ingest.pipeline import IngestPipeline
 from rag.ingest.source import FileSource, IngestSource, UrlSource
 from rag.ingest.types import ChunkMetadata, IngestResult
@@ -39,18 +45,22 @@ _FORMAT_TEXT_HELP: Final[str] = (
 )
 _CHUNK_STATS_HELP: Final[str] = "输出 chunk 质量统计。"
 _NORMALIZE_HELP: Final[str] = (
-    "LLM 段落重整: off (默认) | auto | force；auto/force 需 OPENAI_API_KEY。"
+    "LLM 段落重整: auto (默认, 已结构化内容自动跳过) | off | force；auto/force 需 OPENAI_API_KEY。"
 )
 
 _CLI_HELP: Final[str] = """\
-读取本地文件或 URL，解析、切块并打印到 stdout。
+读取本地文件或 URL，解析、切块、(可选) 写入 PG 并打印到 stdout。
 
 \b
 Options:
   --mode [file|url]                  file=本地路径 (默认); url=HTTP(S) URL
   --format-text | --no-format-text
   --chunk-stats
-  --normalize [off|auto|force]
+  --normalize [off|auto|force]        默认 auto (已结构化内容自动跳过)
+  --dataset-id UUID                  落库目标 dataset; 必传 (或 --create-dataset)
+  --create-dataset                   配合 --dataset-name 新建 dataset
+  --dataset-name STR                 新建 dataset 的展示名
+  --no-persist                       只解析不落库 (调试用)
   -r, --recursive                    仅 file 模式；>100MB 文件跳过
 
 \b
@@ -58,6 +68,8 @@ Examples:
   rag-ingest report.pdf
   rag-ingest -r ./docs/ --chunk-stats
   rag-ingest --mode url https://example.com/page.html
+  rag-ingest report.pdf --dataset-id <UUID>
+  rag-ingest report.pdf --create-dataset --dataset-name "python-tutorial"
 """
 
 app = typer.Typer(name="rag-ingest", add_completion=False)
@@ -88,6 +100,18 @@ def _ensure_normalize_api_key(mode: NormalizeMode) -> None:
     typer.echo(
         f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
         "OPENAI_API_KEY required for --normalize auto|force",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _ensure_embed_api_key() -> None:
+    """PersistStage 需 OPENAI_EMBEDDING_API_KEY; 缺则报错。"""
+    if settings.openai_embedding_api_key.get_secret_value().strip():
+        return
+    typer.echo(
+        f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
+        "OPENAI_EMBEDDING_API_KEY required for persist (--dataset-id / --create-dataset)",
         err=True,
     )
     raise typer.Exit(code=1)
@@ -150,64 +174,138 @@ def _render_error(exc: Exception) -> None:
         typer.echo(f"ingest failed: [{type(exc).__name__}] {exc}", err=True)
 
 
+def _render_persist_result(pr: PersistResult) -> None:
+    typer.echo(
+        f"persisted: dataset_id={pr.dataset_id} name={pr.dataset_name!r} "
+        f"old_chunks={pr.old_chunk_count} new_chunks={pr.new_chunk_count}",
+    )
+
+
+def _render_persist_warning(exc: Exception) -> None:
+    typer.echo(
+        f"{_YELLOW}persist warning (continuing): [{type(exc).__name__}] {exc}{_RESET}",
+        err=True,
+    )
+    logger.warning("persist failed: %r", exc)
+
+
+async def _persist_one_async(
+    result: IngestResult,
+    *,
+    dataset_id: uuid.UUID | None,
+    create_dataset: bool,
+    dataset_name: str | None,
+    embedder: Embeddings,
+) -> PersistResult | BaseException:
+    """单条持久化。失败返回异常对象 (不抛), 避免单文件失败拖垮整批。"""
+    try:
+        async with AsyncSessionLocal() as session:
+            return await persist_chunks(
+                session,
+                result,
+                dataset_id=dataset_id,
+                create_dataset=create_dataset,
+                dataset_name=dataset_name,
+                embedder=embedder,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return exc
+
+
+async def _run_ingest_async(
+    source: IngestSource,
+    *,
+    get_format_text: bool = True,
+    normalize: NormalizeMode = "off",
+    chunk_stats: bool = False,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
+) -> None:
+    pipeline = _build_pipeline(normalize=normalize)
+    result = await pipeline.ingest(source, get_format_text=get_format_text)
+    _render_result(result, chunk_stats=chunk_stats)
+    if not persist:
+        return
+    pr = await _persist_one_async(
+        result,
+        dataset_id=dataset_id,
+        create_dataset=create_dataset,
+        dataset_name=dataset_name,
+        embedder=get_embed_model(),
+    )
+    if isinstance(pr, BaseException):
+        exc = pr if isinstance(pr, Exception) else Exception(pr)
+        _render_persist_warning(exc)
+        return
+    _render_persist_result(pr)
+
+
 def _run_ingest(
     source: IngestSource,
     *,
     get_format_text: bool = True,
     normalize: NormalizeMode = "off",
     chunk_stats: bool = False,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
 ) -> None:
     _configure_cli_logging(normalize)
     _ensure_normalize_api_key(normalize)
-    pipeline = _build_pipeline(normalize=normalize)
+    if persist:
+        _ensure_embed_api_key()
     try:
-        result = asyncio.run(pipeline.ingest(source, get_format_text=get_format_text))
-    except Exception as exc:  # noqa: BLE001
-        _render_error(exc)
-        raise typer.Exit(code=1) from exc
-    _render_result(result, chunk_stats=chunk_stats)
-
-
-async def _run_batch_async(
-    file_paths: list[Path],
-    *,
-    format_text: bool,
-    normalize: NormalizeMode,
-) -> list[IngestResult | BaseException]:
-    pipeline = _build_pipeline(normalize=normalize)
-    sources: list[IngestSource] = [FileSource(path=p) for p in file_paths]
-
-    async def _one(src: IngestSource) -> IngestResult:
-        return await pipeline.ingest(src, get_format_text=format_text)
-
-    return await asyncio.gather(*[_one(s) for s in sources], return_exceptions=True)
-
-
-def _run_batch(
-    *,
-    file_paths: list[Path],
-    normalize: NormalizeMode,
-    format_text: bool,
-    chunk_stats: bool,
-) -> None:
-    _configure_cli_logging(normalize)
-    _ensure_normalize_api_key(normalize)
-    try:
-        results = asyncio.run(
-            _run_batch_async(
-                file_paths=file_paths,
-                format_text=format_text,
+        asyncio.run(
+            _run_ingest_async(
+                source,
+                get_format_text=get_format_text,
                 normalize=normalize,
+                chunk_stats=chunk_stats,
+                persist=persist,
+                dataset_id=dataset_id,
+                create_dataset=create_dataset,
+                dataset_name=dataset_name,
             )
         )
     except Exception as exc:  # noqa: BLE001
         _render_error(exc)
         raise typer.Exit(code=1) from exc
 
+
+async def _run_batch_async(
+    *,
+    file_paths: list[Path],
+    normalize: NormalizeMode,
+    format_text: bool,
+    chunk_stats: bool,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
+) -> bool:
+    """批量 ingest (+ 可选 persist)。返回 ingest 阶段是否有失败。"""
+    pipeline = _build_pipeline(normalize=normalize)
+    sources: list[IngestSource] = [FileSource(path=p) for p in file_paths]
+
+    async def _one(src: IngestSource) -> IngestResult:
+        return await pipeline.ingest(src, get_format_text=format_text)
+
+    ingest_results = await asyncio.gather(
+        *[_one(s) for s in sources],
+        return_exceptions=True,
+    )
+
+    embedder = get_embed_model() if persist else None
+    effective_dataset_id = dataset_id
+    create_next = create_dataset
+
     had_failure = False
     total = len(file_paths)
     for idx, (path, result) in enumerate(
-        zip(file_paths, results, strict=True), start=1
+        zip(file_paths, ingest_results, strict=True), start=1
     ):
         typer.echo(f"[{idx}/{total}] {path}")
         if isinstance(result, BaseException):
@@ -217,8 +315,59 @@ def _run_batch(
             )
         else:
             _render_result(result, chunk_stats=chunk_stats)
+            if persist and embedder is not None:
+                pr = await _persist_one_async(
+                    result,
+                    dataset_id=effective_dataset_id,
+                    create_dataset=create_next,
+                    dataset_name=dataset_name,
+                    embedder=embedder,
+                )
+                if isinstance(pr, BaseException):
+                    exc = pr if isinstance(pr, Exception) else Exception(pr)
+                    _render_persist_warning(exc)
+                else:
+                    _render_persist_result(pr)
+                    if create_next:
+                        effective_dataset_id = pr.dataset_id
+                        create_next = False
         if idx < total:
             typer.echo(_SEPARATOR)
+
+    return had_failure
+
+
+def _run_batch(
+    *,
+    file_paths: list[Path],
+    normalize: NormalizeMode,
+    format_text: bool,
+    chunk_stats: bool,
+    persist: bool = True,
+    dataset_id: uuid.UUID | None = None,
+    create_dataset: bool = False,
+    dataset_name: str | None = None,
+) -> None:
+    _configure_cli_logging(normalize)
+    _ensure_normalize_api_key(normalize)
+    if persist:
+        _ensure_embed_api_key()
+    try:
+        had_failure = asyncio.run(
+            _run_batch_async(
+                file_paths=file_paths,
+                normalize=normalize,
+                format_text=format_text,
+                chunk_stats=chunk_stats,
+                persist=persist,
+                dataset_id=dataset_id,
+                create_dataset=create_dataset,
+                dataset_name=dataset_name,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _render_error(exc)
+        raise typer.Exit(code=1) from exc
 
     if had_failure:
         raise typer.Exit(code=1)
@@ -304,10 +453,52 @@ def ingest_cmd(
     normalize: Annotated[
         NormalizeMode,
         typer.Option("--normalize", help=_NORMALIZE_HELP, case_sensitive=False),
-    ] = "off",
+    ] = "auto",
+    dataset_id: Annotated[
+        uuid.UUID | None,
+        typer.Option(
+            "--dataset-id",
+            help="落库目标 dataset UUID; 与 --create-dataset 二选一。",
+        ),
+    ] = None,
+    create_dataset: Annotated[
+        bool,
+        typer.Option(
+            "--create-dataset/--no-create-dataset",
+            help="配合 --dataset-name 新建 dataset (需 OPENAI_EMBEDDING_API_KEY)",
+        ),
+    ] = False,
+    dataset_name: Annotated[
+        str | None,
+        typer.Option(
+            "--dataset-name",
+            help="新建 dataset 的展示名 (与 --create-dataset 配对使用)",
+        ),
+    ] = None,
+    no_persist: Annotated[
+        bool,
+        typer.Option(
+            "--no-persist",
+            help="只解析切块, 不写 PG (调试用)",
+        ),
+    ] = False,
 ) -> None:
     ingest_mode = cast(IngestMode, mode.lower())
     normalize_mode = cast(NormalizeMode, normalize.lower())
+    persist = (dataset_id is not None or create_dataset) and not no_persist
+
+    if create_dataset and dataset_name is None:
+        typer.echo(
+            "ingest failed: --create-dataset 必须配 --dataset-name",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if create_dataset and dataset_id is not None:
+        typer.echo(
+            "ingest failed: --create-dataset 与 --dataset-id 互斥",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     if ingest_mode == "url":
         if len(targets) != 1:
@@ -318,6 +509,10 @@ def ingest_cmd(
             get_format_text=format_text,
             normalize=normalize_mode,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
         return
 
@@ -340,6 +535,10 @@ def ingest_cmd(
             normalize=normalize_mode,
             format_text=format_text,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
     else:
         _run_ingest(
@@ -347,6 +546,10 @@ def ingest_cmd(
             get_format_text=format_text,
             normalize=normalize_mode,
             chunk_stats=chunk_stats,
+            persist=persist,
+            dataset_id=dataset_id,
+            create_dataset=create_dataset,
+            dataset_name=dataset_name,
         )
 
 

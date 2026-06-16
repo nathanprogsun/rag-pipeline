@@ -54,3 +54,22 @@ class FormatReaderResult:
     format_text: str | None = None
     images: list[str] = field(default_factory=list)
     extras: dict[str, object] = field(default_factory=dict)
+
+
+# ---------- MIME → 文件后缀映射 ----------
+# 原来 html2md.py 与 extensions/docx.py 各自维护一份, 合并到此处。
+
+MIME_EXTENSION: dict[str, str] = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/svg+xml": "svg",
+    "image/bmp": "bmp",
+}
+
+
+def mime_to_extension(mime: str, *, default: str = "bin") -> str:
+    """MIME → 文件后缀, 未识别的返回 ``default`` (默认 ``"bin"``)。"""
+    return MIME_EXTENSION.get(mime.lower(), default)

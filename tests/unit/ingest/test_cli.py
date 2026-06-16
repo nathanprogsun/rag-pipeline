@@ -10,17 +10,12 @@
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 # 让 ``data`` (tests/data 包) 可被 mypy / pytest 解析
-_TESTS_ROOT = Path(__file__).resolve().parents[2]
-if str(_TESTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_TESTS_ROOT))
-
 from data import (  # noqa: E402
     DATA_DIR,
     SAMPLE_CSV,

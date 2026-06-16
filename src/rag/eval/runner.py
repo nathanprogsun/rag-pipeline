@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag.domain.search import SearchRequest
+from rag.eval._jsonl import load_jsonl
 from rag.eval.metrics import (
     aggregate_metric,
     hit_rate_at_k,
@@ -110,7 +111,7 @@ class EvalRunner:
             聚合中的指标名带 per-record k (如 ``recall@5``), 避免跨不同
             k 值聚合。
         """
-        records = _load_jsonl(dataset_path)
+        records = load_jsonl(dataset_path, EvalRecord)
         if not records:
             return EvalSummary(
                 sample_count=0, metric_aggregates={}, warnings=["empty dataset"]
@@ -185,21 +186,6 @@ class EvalRunner:
 
 
 # ---------- Helpers ----------
-
-
-def _load_jsonl(path: Path) -> list[EvalRecord]:
-    """加载 JSONL 文件, 跳过格式错误行并记录 warning。"""
-    records: list[EvalRecord] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(EvalRecord.model_validate_json(line))
-            except Exception as e:
-                logger.warning("Skipping malformed eval record: %r", e)
-    return records
 
 
 def _compute_metrics(

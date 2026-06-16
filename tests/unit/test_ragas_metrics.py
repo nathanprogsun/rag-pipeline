@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from rag.eval._jsonl import load_jsonl
 from rag.eval.ragas_metrics import (
     _split_into_claims,
     _tokenize,
@@ -27,7 +28,6 @@ from rag.eval.ragas_runner import (
     RagasRunner,
     RagasSummary,
     _compute_ragas_metrics,
-    _load_jsonl,
 )
 
 # ---------- _tokenize ----------
@@ -262,7 +262,7 @@ def test_load_ragas_jsonl_parses(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    records = _load_jsonl(f)
+    records = load_jsonl(f, RagasRecord)
     assert len(records) == 1
     assert records[0].query == "q1"
 
@@ -270,14 +270,14 @@ def test_load_ragas_jsonl_parses(tmp_path: Path) -> None:
 def test_load_ragas_jsonl_skips_malformed(tmp_path: Path) -> None:
     f = tmp_path / "ragas.jsonl"
     f.write_text('{"query":"q1"}\nNOT VALID\n{"query":"q2"}\n', encoding="utf-8")
-    records = _load_jsonl(f)
+    records = load_jsonl(f, RagasRecord)
     assert len(records) == 2
 
 
 def test_load_ragas_jsonl_empty(tmp_path: Path) -> None:
     f = tmp_path / "ragas.jsonl"
     f.write_text("", encoding="utf-8")
-    assert _load_jsonl(f) == []
+    assert load_jsonl(f, RagasRecord) == []
 
 
 # ---------- _compute_ragas_metrics ----------

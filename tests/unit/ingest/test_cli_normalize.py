@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from pydantic import SecretStr
 from typer.testing import CliRunner
-
-_TESTS_ROOT = Path(__file__).resolve().parents[2]
-if str(_TESTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_TESTS_ROOT))
 
 from data import SAMPLE_MD  # noqa: E402
 from rag.config import settings  # noqa: E402

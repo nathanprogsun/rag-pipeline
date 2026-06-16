@@ -2,25 +2,15 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.embeddings import Embeddings
 
 from rag.infra.pg.vector_store import VectorRetriever
+from tests._fakes import ConstantEmbeddings
 
 EMBED_DIM = 1536
 
 
-class FakeEmbeddings(Embeddings):
-    async def aembed_query(self, text: str) -> list[float]:
-        return [0.1] * EMBED_DIM
-
-    def embed_query(self, text: str) -> list[float]:
-        return [0.1] * EMBED_DIM
-
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1] * EMBED_DIM for _ in texts]
+_FAKE_EMB_VECTOR = [0.1] * EMBED_DIM
+FakeEmbeddings = ConstantEmbeddings(vector=_FAKE_EMB_VECTOR)
 
 
 @pytest.mark.asyncio
@@ -39,7 +29,7 @@ async def test_vector_retriever_uses_repository() -> None:
             return_value=[],
         ) as mock_search,
     ):
-        retriever = VectorRetriever(dataset_id=dataset_id, embed_model=FakeEmbeddings())
+        retriever = VectorRetriever(dataset_id=dataset_id, embed_model=FakeEmbeddings)
         hits = await retriever.search("test", top_k=5)
 
     assert isinstance(hits, list)

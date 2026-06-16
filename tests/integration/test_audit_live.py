@@ -21,163 +21,22 @@ from pathlib import Path
 
 import pytest
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rag.config import settings
-from rag.domain.document import ChunkMetadata, ScoredDocument
+from rag.domain.document import ScoredDocument
 from rag.domain.search import Citation, SearchRequest
 from rag.infra.observability.audit import AuditRecord, AuditTap, read_jsonl_records
-from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
-from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.dataset import DatasetModel
-from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.infra.text.citation_check import CitationChecker
 from rag.search.orchestrator import SearchPipeline
 from rag.search.post.cite import SimpleCite
-from rag.search.retrieve.subgraph import SearchSubgraph
-
-EMBED_DIM: int = settings.openai_embedding_dim
-
+from tests.integration._db_helpers import (
+    create_dataset,
+    seed_chunks,
+)
+from tests.integration._retriever import make_subgraph
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-async def _create_dataset(db_session: AsyncSession, name: str) -> uuid.UUID:
-    ds = DatasetModel(
-        id=uuid.uuid4(),
-        name=name,
-        embed_model=settings.openai_embedding_model,
-        embed_dim=EMBED_DIM,
-    )
-    db_session.add(ds)
-    await db_session.flush()
-    return ds.id
-
-
-async def _seed_chunks(
-    db_session: AsyncSession,
-    *,
-    dataset_id: uuid.UUID,
-    texts: list[str],
-    embed_model: Embeddings,
-) -> list[ChunkModel]:
-    embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
-    chunks: list[ChunkModel] = []
-    for content, emb in zip(texts, embeddings, strict=True):
-        chunk = ChunkModel(dataset_id=dataset_id, text=content, embedding=emb)
-        db_session.add(chunk)
-        chunks.append(chunk)
-    await db_session.flush()
-    for chunk in chunks:
-        await db_session.execute(
-            text(
-                "UPDATE chunks SET ts_tokens = to_tsvector('simple', :t) WHERE id = :id"
-            ),
-            {"t": ChineseTokenizer().build_tsvector(chunk.text), "id": chunk.id},
-        )
-    await db_session.commit()
-    return chunks
-
-
-class _RepoRetriever:
-    """Runnable adapter wrapping ChunkRepository。"""
-
-    def __init__(
-        self,
-        *,
-        session_factory: async_sessionmaker[AsyncSession],
-        dataset_id: uuid.UUID,
-        mode: str,
-        embed_model: Embeddings | None = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self.dataset_id = dataset_id
-        self.mode = mode
-        self.embed_model = embed_model
-
-    async def ainvoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        query = str(input["query"])
-        raw_top_k = input.get("top_k", 10)
-        top_k = raw_top_k if isinstance(raw_top_k, int) else 10
-
-        async with self.session_factory() as session:
-            repo = ChunkRepository(session)
-            if self.mode == "vector":
-                assert self.embed_model is not None
-                query_emb = await self.embed_model.aembed_query(query)
-                rows = await repo.search_by_vector(query_emb, self.dataset_id, top_k)
-            elif self.mode == "fulltext":
-                rows = await repo.search_by_fulltext(query, self.dataset_id, top_k)
-            else:
-                msg = f"unknown mode: {self.mode}"
-                raise ValueError(msg)
-
-            return [
-                ScoredDocument(
-                    chunk_id=chunk.id,
-                    dataset_id=chunk.dataset_id,
-                    text=chunk.text,
-                    score=score,
-                    rank=i,
-                    source=self.mode,  # type: ignore[arg-type]
-                    modality=chunk.modality,
-                    image_path=chunk.image_path,
-                    metadata=ChunkMetadata(
-                        dataset_id=chunk.dataset_id,
-                        datasource=chunk.metadata.datasource,
-                        filename=chunk.metadata.filename,
-                        parent_title=chunk.metadata.parent_title,
-                        chunk_index=chunk.metadata.chunk_index,
-                    ),
-                )
-                for i, (chunk, score) in enumerate(rows)
-            ]
-
-    def invoke(
-        self,
-        input: dict[str, object],
-        config: object = None,
-        **kwargs: object,
-    ) -> list[ScoredDocument]:
-        from rag.infra.pg.runnable_sync import run_coroutine_sync
-
-        return run_coroutine_sync(lambda: self.ainvoke(input, config, **kwargs))
-
-
-def _make_subgraph(
-    *,
-    session_factory: async_sessionmaker[AsyncSession],
-    dataset_id: uuid.UUID,
-    embed_model: Embeddings,
-    top_k: int = 10,
-) -> SearchSubgraph:
-    return SearchSubgraph(
-        dataset_id=dataset_id,
-        vector_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="vector",
-            embed_model=embed_model,
-        ),
-        fulltext_retriever=_RepoRetriever(  # type: ignore[arg-type]
-            session_factory=session_factory,
-            dataset_id=dataset_id,
-            mode="fulltext",
-        ),
-        top_k=top_k,
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Real audit + citation check scenarios
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -191,8 +50,8 @@ async def test_real_audit_records_orchestrator_run(
     """真实场景 1: orchestrator → AuditTap → 真实 NDJSON file。
     验证: 真实 PG + 真实 embedding 跑完后, 写出的 NDJSON 含正确字段。
     """
-    ds = await _create_dataset(db_session, "audit-real-1")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "audit-real-1")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -202,7 +61,7 @@ async def test_real_audit_records_orchestrator_run(
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -242,15 +101,15 @@ async def test_real_audit_multiple_requests_ndjson(
     tmp_path: Path,
 ) -> None:
     """真实场景 2: 多个连续请求 → 多行 NDJSON, 每行独立 JSON。"""
-    ds = await _create_dataset(db_session, "audit-multi")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "audit-multi")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 教程。", "Python 数据分析。"],
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -291,15 +150,15 @@ async def test_real_audit_parent_doc_window_captured(
     """真实场景 3: req.context.parent_doc_window > 0 → audit 记录该字段。"""
     from rag.domain.search import ContextConfig
 
-    ds = await _create_dataset(db_session, "audit-window")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "audit-window")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 教程。"],
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -331,15 +190,15 @@ async def test_real_audit_failed_dataset_tracked(
     tmp_path: Path,
 ) -> None:
     """真实场景 4: missing dataset_id → failed_dataset_ids 进入 audit。"""
-    ds_registered = await _create_dataset(db_session, "audit-fail")
-    await _seed_chunks(
+    ds_registered = await create_dataset(db_session, "audit-fail")
+    await seed_chunks(
         db_session,
         dataset_id=ds_registered,
         texts=["Python 教程。"],
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds_registered: _make_subgraph(
+        ds_registered: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds_registered,
             embed_model=live_embed_model,
@@ -373,8 +232,8 @@ async def test_real_citation_check_end_to_end(
     验证: 真实 LLM 输出的 [id](CITE) markers (mock gen 模拟) 经过
     CitationChecker 校验, 与真实 citations 一致 → valid=True。
     """
-    ds = await _create_dataset(db_session, "cite-check-e2e")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "cite-check-e2e")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=[
@@ -385,7 +244,7 @@ async def test_real_citation_check_end_to_end(
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,
@@ -424,15 +283,15 @@ async def test_real_citation_check_invalid_marker(
     live_embed_model: Embeddings,
 ) -> None:
     """真实场景 6: gen emit [99](CITE) 超出 citations 范围 → CitationChecker 检出。"""
-    ds = await _create_dataset(db_session, "cite-check-invalid")
-    await _seed_chunks(
+    ds = await create_dataset(db_session, "cite-check-invalid")
+    await seed_chunks(
         db_session,
         dataset_id=ds,
         texts=["Python 教程。"],
         embed_model=live_embed_model,
     )
     subgraphs = {
-        ds: _make_subgraph(
+        ds: make_subgraph(
             session_factory=pg_session_factory,
             dataset_id=ds,
             embed_model=live_embed_model,

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-import re
 
-from rag.error_codes import ReaderErrorCode
-from rag.exception import RAGError
 from rag.ingest.chunker import Chunker
+from rag.ingest.chunker._heading_re import extract_first_title
 from rag.ingest.chunker.types import ChunkContext
 from rag.ingest.normalizer import NoOpNormalizer, Normalizer
 from rag.ingest.reader import dispatch_bytes, read_url
@@ -21,29 +19,10 @@ from rag.ingest.types import Chunk, DocMeta, IngestResult, TextDoc
 
 logger = logging.getLogger(__name__)
 
-# doc-level title 抽取: 优先 Markdown `# title` 或 HTML `<h1>title</h1>` 第一项。
-_TITLE_MD_RE = re.compile(r"^#{1,5}\s+(.+)$", re.MULTILINE)
-_TITLE_HTML_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
-
-
-def _extract_title(text: str) -> str | None:
-    """从纯文本中抽第一行 `#` 标题或 `<h1>`, 失败返回 None。"""
-    m = _TITLE_MD_RE.search(text)
-    if m:
-        title = m.group(1).strip()
-        if title:
-            return title
-    m = _TITLE_HTML_RE.search(text)
-    if m:
-        title = re.sub(r"\s+", " ", m.group(1)).strip()
-        if title:
-            return title
-    return None
-
 
 def _derive_title(text_doc: TextDoc, warnings: list[str]) -> str | None:
     """doc-level title 推导: 文本内 `#` / `<h1>` 第一项, 兜底 filename。"""
-    title = _extract_title(text_doc.text)
+    title = extract_first_title(text_doc.text)
     if title:
         return title
     if text_doc.meta.filename:
@@ -117,34 +96,15 @@ class IngestPipeline:
         return await self._process(text_doc, get_format_text=get_format_text)
 
     async def _read_file(self, source: FileSource) -> TextDoc:
-        """FileSource -> TextDoc: 直接走 ``await dispatch_bytes``。
+        """FileSource -> TextDoc: 复用 ``read_to_buffer`` 后 async dispatch。
 
-        不用 ``read_file`` 是因为后者用 ``asyncio.run`` 包, 在已处于 event loop
-        时会抛 ``RuntimeError``。
+        不直接调 ``read_file`` (后者用 ``asyncio.run`` 包, 在已处于 event loop
+        时会抛 ``RuntimeError``)。
         """
+        from rag.ingest.reader.file import read_to_buffer  # noqa: PLC0415
+
         p = source.path
-        if not p.exists():
-            raise RAGError(
-                code=ReaderErrorCode.NOT_FOUND,
-                message=f"{p}: file does not exist",
-            )
-        if not p.is_file():
-            raise RAGError(
-                code=ReaderErrorCode.NOT_FOUND,
-                message=f"{p}: not a regular file",
-            )
-        try:
-            buffer = p.read_bytes()
-        except PermissionError as e:
-            raise RAGError(
-                code=ReaderErrorCode.PERMISSION,
-                message=f"{p}: {e}",
-            ) from e
-        except OSError as e:
-            raise RAGError(
-                code=ReaderErrorCode.PARSE,
-                message=f"{p}: {e}",
-            ) from e
+        buffer = read_to_buffer(p)
         return await dispatch_bytes(
             buffer=buffer,
             extension=p.suffix,

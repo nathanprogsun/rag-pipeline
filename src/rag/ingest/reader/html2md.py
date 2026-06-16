@@ -30,7 +30,11 @@ from typing import Final, cast
 from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as _md
 
-from rag.ingest.reader.types import UploadedFileResult, UploadFileHandler
+from rag.ingest.reader.types import (
+    UploadedFileResult,
+    UploadFileHandler,
+    mime_to_extension,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,17 +49,6 @@ _BASE64_SRC_RE: Final[re.Pattern[str]] = re.compile(
     r"""\bsrc\s*=\s*(["'])data:([^;]+);base64,([A-Za-z0-9+/=]+)\1""",
     re.IGNORECASE,
 )
-
-# 简单文件后缀 → mime 映射 (base64 上传时 filename 用)
-_MIME_EXT: Final[dict[str, str]] = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "image/bmp": "bmp",
-}
 
 
 async def html_to_md(
@@ -152,7 +145,7 @@ async def _upload_base64_concurrent(
             except Exception as e:
                 logger.warning("base64 decode failed (mime=%s): %s", mime, e)
                 return f"src={quote}{quote}"
-            ext = _MIME_EXT.get(mime.lower(), "bin")
+            ext = mime_to_extension(mime)
             filename = f"html_base64_{abs(hash((mime, b64[:32]))) & 0xFFFFFFFF:x}.{ext}"
             try:
                 result: UploadedFileResult = await upload_file(

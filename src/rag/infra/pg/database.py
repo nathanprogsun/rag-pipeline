@@ -54,7 +54,9 @@ async def truncate_all() -> None:
     async with engine.begin() as conn:
         # chunks 有 FK 指向 datasets, ON DELETE CASCADE 允许一次 TRUNCATE datasets CASCADE
         # 显式两张表 + CASCADE 兼顾可读性
-        await conn.execute(text("TRUNCATE TABLE chunks, datasets RESTART IDENTITY CASCADE"))
+        await conn.execute(
+            text("TRUNCATE TABLE chunks, datasets RESTART IDENTITY CASCADE")
+        )
 
 
 async def drop_all() -> None:

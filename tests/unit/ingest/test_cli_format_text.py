@@ -7,14 +7,7 @@ R3 新增: typer 选项 ``--format-text`` (默认) / ``--no-format-text``, 透�
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from typer.testing import CliRunner
-
-_TESTS_ROOT = Path(__file__).resolve().parents[2]
-if str(_TESTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_TESTS_ROOT))
 
 from data import SAMPLE_CSV  # noqa: E402
 from rag.ingest.cli import app  # noqa: E402
