@@ -236,7 +236,6 @@ def _build_domain_chunk(
         image_path=None,
         embedding=embedding,
         metadata=DomainChunkMetadata(
-            dataset_id=dataset_id,
             datasource="file",
             filename=filename,
             parent_title=meta.heading_stack[0] if meta.heading_stack else "",

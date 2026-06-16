@@ -151,7 +151,6 @@ def _to_scored(chunk: DomainChunk, score: float) -> ScoredDocument:
         modality=chunk.modality,
         image_path=chunk.image_path,
         metadata=ChunkMetadata(
-            dataset_id=chunk.dataset_id,
             datasource=chunk.metadata.datasource,
             filename=chunk.metadata.filename,
             parent_title=chunk.metadata.parent_title,

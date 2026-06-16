@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Any, cast
 
 from rag.domain.document import Chunk as DomainChunk
@@ -53,21 +52,8 @@ def test_chunk_model_to_domain_maps_all_fields() -> None:
     assert chunk.metadata.parent_title == "Chapter 1"
     assert chunk.metadata.chunk_index == 3
     assert chunk.metadata.filename == "doc.md"
-    assert chunk.metadata.dataset_id == model.dataset_id
-    # PG schema 不持久化: datasource / custom_separator 取默认
+    # PG schema 不持久化: datasource 取默认
     assert chunk.metadata.datasource == "file"
-    assert chunk.metadata.custom_separator is None
-
-
-def test_chunk_model_to_domain_preserves_created_at() -> None:
-    """TimestampMixin.created_at 应流入 ChunkMetadata.created_at。"""
-    ts = datetime(2026, 6, 13, 12, 0, 0)
-    model = _make_model()
-    model.created_at = ts
-
-    chunk = chunk_model_to_domain(model)
-
-    assert chunk.metadata.created_at == ts
 
 
 def test_chunk_model_to_domain_handles_image_modality() -> None:
@@ -102,7 +88,6 @@ def test_domain_chunk_to_model_maps_all_fields() -> None:
         modality="text",
         image_path=None,
         metadata=DomainChunkMetadata(
-            dataset_id=uuid.UUID("00000000-0000-0000-0000-0000000000bb"),
             datasource="file",
             filename="out.md",
             parent_title="Intro",
@@ -134,7 +119,6 @@ def test_domain_chunk_to_model_defaults_embedding_when_none() -> None:
         text="no embedding yet",
         modality="text",
         metadata=DomainChunkMetadata(
-            dataset_id=uuid.uuid4(),
             datasource="file",
         ),
         embedding=None,
@@ -156,7 +140,6 @@ def test_roundtrip_preserves_persisted_fields() -> None:
         text="roundtrip",
         modality="text",
         metadata=DomainChunkMetadata(
-            dataset_id=uuid.uuid4(),
             datasource="file",
             filename="x.md",
             parent_title="P",

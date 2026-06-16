@@ -30,7 +30,7 @@ from rag.eval.runner import (
 
 
 def _meta() -> ChunkMetadata:
-    return ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    return ChunkMetadata(datasource="file")
 
 
 def _doc(chunk_id_str: str, *, score: float = 0.5) -> ScoredDocument:

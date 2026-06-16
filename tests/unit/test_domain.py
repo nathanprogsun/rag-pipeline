@@ -24,10 +24,10 @@ def test_dataset_creation() -> None:
 
 
 def test_chunk_requires_dataset_id() -> None:
-    meta = ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    meta = ChunkMetadata()
     chunk = Chunk(
         id=uuid.uuid4(),
-        dataset_id=meta.dataset_id,
+        dataset_id=uuid.uuid4(),
         document_id=uuid.uuid4(),
         text="hello",
         metadata=meta,
@@ -37,10 +37,10 @@ def test_chunk_requires_dataset_id() -> None:
 
 
 def test_scored_document_has_image_path() -> None:
-    meta = ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    meta = ChunkMetadata()
     doc = ScoredDocument(
         chunk_id=uuid.uuid4(),
-        dataset_id=meta.dataset_id,
+        dataset_id=uuid.uuid4(),
         text="x",
         score=0.5,
         rank=0,

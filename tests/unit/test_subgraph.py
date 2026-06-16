@@ -21,7 +21,7 @@ from rag.search.retrieve.subgraph import (
 
 
 def _meta() -> ChunkMetadata:
-    return ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    return ChunkMetadata(datasource="file")
 
 
 def _doc(

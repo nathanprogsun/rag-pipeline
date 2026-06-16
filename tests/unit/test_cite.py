@@ -24,7 +24,7 @@ from rag.search.post.cite import SimpleCite
 
 
 def _meta() -> ChunkMetadata:
-    return ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    return ChunkMetadata(datasource="file")
 
 
 def _doc(

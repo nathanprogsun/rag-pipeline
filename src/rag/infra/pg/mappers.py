@@ -16,9 +16,7 @@ retriever / repository 直接调 mapper, 不再散落隐式映射。
   ``parent_title``               ``Chunk.metadata.parent_title``
   ``chunk_index``                ``Chunk.metadata.chunk_index``
   ``filename``                   ``Chunk.metadata.filename``
-  ``created_at`` (Mixin)         ``Chunk.metadata.created_at``
   —                              ``Chunk.metadata.datasource`` (默认 ``"file"``, PG 不存)
-  —                              ``Chunk.metadata.custom_separator`` (默认 ``None``, PG 不存)
 """
 
 from __future__ import annotations
@@ -34,13 +32,10 @@ from rag.infra.pg.models.document import DocumentModel  # noqa: F401  # 注册�
 def chunk_model_to_domain(model: ChunkModel) -> DomainChunk:
     """``ChunkModel``（PG 行）转 ``domain.document.Chunk``（业务层）。"""
     metadata = DomainChunkMetadata(
-        dataset_id=model.dataset_id,
         datasource="file",  # PG schema 当前不持久化 datasource, 读路径取默认
         filename=model.filename,
         parent_title=model.parent_title,
         chunk_index=model.chunk_index,
-        custom_separator=None,  # PG schema 当前不持久化 custom_separator
-        created_at=model.created_at,
     )
     return DomainChunk(
         id=model.id,
@@ -63,7 +58,7 @@ def domain_chunk_to_model(chunk: DomainChunk) -> ChunkModel:
     """``domain.document.Chunk``（业务层）转 ``ChunkModel``（PG 行）。
 
     写库前调用（例如 ingest 写库入口）。PG schema 不存的字段
-    （``datasource``、``custom_separator``）仅留业务侧, 不下推。
+    （``datasource``）仅留业务侧, 不下推。
     """
     return ChunkModel(
         id=chunk.id,

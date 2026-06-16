@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -14,13 +13,10 @@ class ChunkMetadata(BaseModel):
     PG schema 不持久化此字段, mapper 读路径取默认。
     """
 
-    dataset_id: uuid.UUID
     datasource: Literal["file"] = "file"
     filename: str | None = None
     parent_title: str = ""
     chunk_index: int = 0
-    custom_separator: str | None = None
-    created_at: datetime | None = None
 
 
 class Chunk(BaseModel):
