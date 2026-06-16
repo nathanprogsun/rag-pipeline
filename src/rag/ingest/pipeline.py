@@ -103,15 +103,16 @@ class IngestPipeline:
             return IngestOutcome(items=[], warnings=warnings, errors=[])
 
         # 1.5 解析 dataset (并发前一次性创建, 消除 cfg.adopt race)
+        cfg = self.persist_config
         resolved_dataset_id: uuid.UUID | None = None
-        if self.persist_enabled and self.persist_config is not None and self.persist_config.create_dataset:
-            async with AsyncSessionLocal() as session:
-                resolved_dataset_id = await _create_dataset_once(
-                    session, self.persist_config.dataset_name
-                )
-            # 之后所有 _process 直接用 resolved_dataset_id, 不再 mutate config
-        elif self.persist_enabled and self.persist_config is not None and self.persist_config.dataset_id is not None:
-            resolved_dataset_id = self.persist_config.dataset_id
+        if self.persist_enabled and cfg is not None:
+            if cfg.create_dataset:
+                async with AsyncSessionLocal() as session:
+                    resolved_dataset_id = await _create_dataset_once(
+                        session, cfg.dataset_name
+                    )
+            elif cfg.dataset_id is not None:
+                resolved_dataset_id = cfg.dataset_id
 
         # 2. 并行 ingest
         results = await asyncio.gather(
