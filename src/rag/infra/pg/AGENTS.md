@@ -26,3 +26,10 @@
 
 - `database.py`：`create_async_engine(str(settings.database_url))`；共享 `engine` 与 `AsyncSessionLocal`。
 - `init_pool()` 用于开发环境自动建表；生产环境用 Alembic（尚未接入，勿自行编造迁移工具）。
+
+## documents 表与 chunk 唯一性
+
+- `documents` 是 `datasets` 与 `chunks` 之间的一级实体: 一个 `(dataset_id, filename)` 对应一个 active document (由 `documents_active_uniq` 部分唯一索引保证)。
+- `chunks.document_id` 为 NOT NULL FK; `(document_id, chunk_index)` 由 `chunks_document_chunk_idx_uniq` 部分唯一索引保证不重复。
+- 同一文件重 ingest 时, 通过 `documents.generation` 区分版本; 读取时取 `MAX(generation)` 决定可见性。
+- `datasets.name` UNIQUE: 重复 `--dataset-name` 第二次会失败而非静默重名。

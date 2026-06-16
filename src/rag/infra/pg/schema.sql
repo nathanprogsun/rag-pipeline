@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS datasets (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name            TEXT NOT NULL,
+  name            TEXT NOT NULL UNIQUE,
   embed_model     TEXT NOT NULL,
   embed_dim       INT  NOT NULL,
   chunk_size      INT  NOT NULL DEFAULT 1000,
@@ -20,9 +20,34 @@ CREATE TABLE IF NOT EXISTS datasets (
   deleted_at      TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS documents (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  dataset_id      UUID NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  filename        TEXT NOT NULL,
+  content_hash    BYTEA,
+  modality        TEXT NOT NULL DEFAULT 'text',
+  page_count      INT,
+  total_chunks    INT NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','running','completed','failed')),
+  generation      INT  NOT NULL DEFAULT 1,
+  error_code      TEXT,
+  last_processed_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS documents_active_uniq
+  ON documents (dataset_id, filename) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS documents_dataset_id_idx
+  ON documents (dataset_id);
+CREATE INDEX IF NOT EXISTS documents_status_idx
+  ON documents (status) WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS chunks (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   dataset_id    UUID NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+  document_id   UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   text          TEXT NOT NULL,
   modality      TEXT NOT NULL DEFAULT 'text',
   image_path    TEXT,
@@ -46,3 +71,5 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw
 CREATE INDEX IF NOT EXISTS chunks_ts_tokens_gin  ON chunks USING GIN (ts_tokens);
 CREATE INDEX IF NOT EXISTS chunks_dataset_id_idx ON chunks (dataset_id);
 CREATE INDEX IF NOT EXISTS chunks_modality_idx   ON chunks (modality);
+CREATE UNIQUE INDEX IF NOT EXISTS chunks_document_chunk_idx_uniq
+  ON chunks (document_id, chunk_index) WHERE deleted_at IS NULL;
