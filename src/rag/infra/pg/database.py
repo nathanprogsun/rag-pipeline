@@ -8,6 +8,7 @@ from rag.infra.pg.base import Base
 # (SQLAlchemy 在 class 定义时把 Table 注册到 metadata, 仅 import 模型模块即可触发)
 from rag.infra.pg.models import chunk as _chunk_model  # noqa: F401
 from rag.infra.pg.models import dataset as _dataset_model  # noqa: F401
+from rag.infra.pg.models import document as _document_model  # noqa: F401
 
 engine = create_async_engine(
     str(settings.database_url),
@@ -45,17 +46,20 @@ async def init_pool() -> None:
 async def truncate_all() -> None:
     """清空所有业务表数据, 保留 schema。
 
-    业务表包括: `chunks`, `datasets` (按 FK CASCADE 链一并清空)。
+    业务表包括: `chunks`, `documents`, `datasets` (按 FK CASCADE 链一并清空)。
     无 `AuditRecord` 表 (audit 走 NDJSON 文件, 不在 PG 内)。
 
     Returns:
         被清空的表名列表 (按删除顺序, datasets 在最后以确保 CASCADE 触发)。
     """
     async with engine.begin() as conn:
-        # chunks 有 FK 指向 datasets, ON DELETE CASCADE 允许一次 TRUNCATE datasets CASCADE
-        # 显式两张表 + CASCADE 兼顾可读性
+        # chunks 有 FK 指向 documents/datasets, ON DELETE CASCADE 允许一次 TRUNCATE CASCADE
+        # 显式三张表 + CASCADE 兼顾可读性
         await conn.execute(
-            text("TRUNCATE TABLE chunks, datasets RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE TABLE chunks, documents, datasets "
+                "RESTART IDENTITY CASCADE"
+            )
         )
 
 
