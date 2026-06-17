@@ -1,7 +1,7 @@
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,13 @@ class ChunkModel(Base, TimestampMixin, SoftDeleteMixin):
         ),
         Index("chunks_dataset_id_idx", "dataset_id"),
         Index("chunks_modality_idx", "modality"),
+        Index(
+            "chunks_document_chunk_idx_uniq",
+            "document_id",
+            "chunk_index",
+            postgresql_where=text("deleted_at IS NULL"),
+            unique=True,
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -28,6 +35,11 @@ class ChunkModel(Base, TimestampMixin, SoftDeleteMixin):
     dataset_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("datasets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)

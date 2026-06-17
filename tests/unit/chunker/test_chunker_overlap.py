@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from rag.ingest.chunker.overlap import get_overlap_tail
+from rag.ingest.chunker.rules import build_steps
 from rag.ingest.chunker.utils import valid_len
+
+# 统一的测试用 Rule 列表, 与历史模块级 STEPS 等价。
+RULES = build_steps(chunk_size=1000, max_size=8000, paragraph_chunk_deep=5)
 
 
 def test_overlap_returns_empty_when_step_is_final() -> None:
-    """step >= 12 时 (已无下一级, STEPS 总长 12) → 不算 overlap。"""
+    """step >= 12 时 (已无下一级, 默认 Rule 总长 12) → 不算 overlap。"""
     result = get_overlap_tail(
         text="段落内容。另一段。",
         step=12,
+        rules=RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -24,6 +29,7 @@ def test_overlap_returns_15_percent_of_text() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,  # punct_merged 级 (新设计 step 10), 允许 overlap
+        rules=RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -37,6 +43,7 @@ def test_overlap_capped_at_max_overlap() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,
+        rules=RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -50,6 +57,7 @@ def test_overlap_uses_valid_len_not_len() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,
+        rules=RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -63,6 +71,7 @@ def test_overlap_unicode_emoji_zwj() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,
+        rules=RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,

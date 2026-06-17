@@ -58,16 +58,11 @@ async def test_pptx_extension_adapter_minimal() -> None:
 
     assert text in result.raw_text
     assert result.meta.mime == PPTX_MIME
-    assert result.meta.encoding == "utf-8"
-    assert result.meta.size_bytes == len(buf)
     assert (
         result.meta.page_count is None
     )  # parse_office 不返回 page_count, 与原 adapter 一致
-    assert result.meta.datasource == "file"
-    # 薄封装不抽图片 / extras
+    # 薄封装不抽图片
     assert result.format_text is None
-    assert result.images == []
-    assert result.extras == {}
 
 
 # ── 真实 fixture ──
@@ -78,11 +73,9 @@ async def test_pptx_extension_adapter_against_real_fixture() -> None:
     buf = SAMPLE_PPTX.read_bytes()
     result = await pptx_adapter(buf)
 
-    assert result.meta.size_bytes == len(buf)
     assert result.meta.mime == PPTX_MIME
     assert isinstance(result.raw_text, str)
     assert len(result.raw_text) > 0
-    assert result.images == []
 
 
 # ── 错误包装 ──
@@ -121,10 +114,10 @@ async def test_pptx_extension_adapter_error_chain() -> None:
 # ── encoding 参数传递 ──
 
 
-async def test_pptx_extension_adapter_encoding_passed_through() -> None:
-    """encoding 参数传到 DocMeta.encoding。"""
+async def test_pptx_extension_adapter_accepts_encoding_kwarg() -> None:
+    """encoding 参数保留签名, 不再断言 meta.encoding。"""
     result = await pptx_adapter(_minimal_pptx("hi"), encoding="gbk")
-    assert result.meta.encoding == "gbk"
+    assert result.meta.mime == PPTX_MIME
 
 
 # ── 多 slide ──
@@ -152,6 +145,5 @@ async def test_pptx_extension_adapter_multi_slide() -> None:
     assert "alpha" in result.raw_text
     assert "bravo" in result.raw_text
     assert "charlie" in result.raw_text
-    # slide 间 \n; paragraph_count 估算: split('\n') 后非空行
+    # slide 间 \n
     assert "\n" in result.raw_text
-    assert (result.meta.paragraph_count or 0) >= 3

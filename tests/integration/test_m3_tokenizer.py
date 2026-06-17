@@ -30,7 +30,7 @@ def _doc(text: str) -> ScoredDocument:
         score=0.5,
         rank=0,
         source="vector",
-        metadata=ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file"),
+        metadata=ChunkMetadata(datasource="file"),
     )
 
 

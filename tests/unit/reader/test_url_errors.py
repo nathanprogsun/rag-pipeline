@@ -15,13 +15,16 @@ from __future__ import annotations
 import httpx
 import pytest
 
+import rag.ingest.reader.url as url_mod
+from rag.error_codes import ReaderErrorCode
+from rag.exception import RAGError
+from rag.ingest.reader.url import read_url
+
 
 def _patch_async_client_with_transport(
     monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
 ) -> None:
     """把 rag.ingest.reader.url 模块里的 httpx.AsyncClient 替换成注入 transport 的版本。"""
-    import rag.ingest.reader.url as url_mod
-
     real_client = url_mod.httpx.AsyncClient
 
     def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
@@ -54,10 +57,6 @@ async def test_read_url_404_raises_reader_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HTTP 404 → raise_for_status 触发 → RAGError(reader.parse)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     transport = httpx.MockTransport(
         lambda req: httpx.Response(404, content=b"not found", request=req)
     )
@@ -77,10 +76,6 @@ async def test_read_url_timeout_raises_reader_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """MockTransport 抛 ConnectTimeout → RAGError(reader.parse)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     transport = httpx.MockTransport(
         lambda req: (_ for _ in ()).throw(httpx.ConnectTimeout("connection timed out"))
     )
@@ -100,10 +95,6 @@ async def test_read_url_500_raises_reader_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HTTP 500 → RAGError(reader.parse)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     transport = httpx.MockTransport(
         lambda req: httpx.Response(500, content=b"internal error", request=req)
     )
@@ -120,10 +111,6 @@ async def test_read_url_503_raises_reader_parse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HTTP 503 → RAGError(reader.parse)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     transport = httpx.MockTransport(
         lambda req: httpx.Response(503, content=b"unavailable", request=req)
     )
@@ -146,9 +133,6 @@ async def test_read_url_oversize_from_content_length(
 
     read_url 在 HEAD 预检时就抛错, 不下载 body。
     """
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "HEAD":
@@ -173,10 +157,6 @@ async def test_read_url_oversize_after_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HEAD 不带 content-length 但 GET 后 body 实际超长 → too_large (下载后检查)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     big_body = b"x" * 1000
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -206,10 +186,6 @@ async def test_read_url_redirect_loop_raises_reader_parse(
     httpx follow_redirects=True 默认最多 20 次, 超出抛 TooManyRedirects
     (HTTPError 子类)。
     """
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.reader.url import read_url
-
     transport = httpx.MockTransport(
         lambda req: httpx.Response(
             302,
@@ -238,8 +214,6 @@ async def test_read_url_binary_content_with_text_html_mime_does_not_raise(
     (返回 U+FFFD 替换字符), 不抛错。html adapter 也跟着不抛错。
     read_url 拿到一个含 U+FFFD 的文本 doc (mime 仍是 text/html)。
     """
-    from rag.ingest.reader.url import read_url
-
     fake_binary = b"\x00\x01\x02\xff\xfe" * 50  # 非 UTF-8 valid
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -270,7 +244,6 @@ async def test_read_url_head_fails_but_get_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """HEAD 抛错 (e.g. 405) → GET 继续, 不抛错。read_url 内部 try/except 吞 HEAD HTTPError。"""
-    from rag.ingest.reader.url import read_url
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "HEAD":
@@ -286,59 +259,3 @@ async def test_read_url_head_fails_but_get_succeeds(
     doc = await read_url("https://example.com/head405")
 
     assert "Head405" in doc.text
-
-
-# ── 完整链路: pipeline 走 URL 也走通 ──
-
-
-@pytest.mark.asyncio
-async def test_read_url_404_via_pipeline_raises_reader_parse(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """404 错误贯穿到 pipeline.ingest 也会正确抛 RAGError。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.chunker import Chunker, ChunkSettings
-    from rag.ingest.pipeline import IngestPipeline
-    from rag.ingest.source import UrlSource
-
-    transport = httpx.MockTransport(
-        lambda req: httpx.Response(404, content=b"missing", request=req)
-    )
-    _patch_async_client_with_transport(monkeypatch, transport)
-
-    pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()))
-    with pytest.raises(RAGError) as exc_info:
-        await pipeline.ingest(UrlSource("https://gone.example.com/page"))
-
-    assert exc_info.value.code == ReaderErrorCode.PARSE
-
-
-@pytest.mark.asyncio
-async def test_read_url_oversize_via_pipeline_raises_reader_too_large(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """oversize 错误贯穿 pipeline 也抛 RAGError(too_large)。"""
-    from rag.error_codes import ReaderErrorCode
-    from rag.exception import RAGError
-    from rag.ingest.chunker import Chunker, ChunkSettings
-    from rag.ingest.pipeline import IngestPipeline
-    from rag.ingest.source import UrlSource
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "HEAD":
-            return httpx.Response(
-                200,
-                headers={"content-length": str(10_000_000)},
-                request=req,
-            )
-        return _ok_response(request=req)
-
-    transport = httpx.MockTransport(handler)
-    _patch_async_client_with_transport(monkeypatch, transport)
-
-    pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()))
-    with pytest.raises(RAGError) as exc_info:
-        await pipeline.ingest(UrlSource("https://big.example.com", max_size=1_000_000))
-
-    assert exc_info.value.code == ReaderErrorCode.TOO_LARGE

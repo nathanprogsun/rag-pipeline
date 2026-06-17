@@ -33,7 +33,7 @@ from rag.ingest.types import DocMeta, TextDoc
 
 def test_normalizer_base_raises_not_implemented() -> None:
     """Base Normalizer.normalize is abstract; instantiating & calling raises."""
-    raw = TextDoc(text="x", meta=DocMeta(datasource="file"))
+    raw = TextDoc(text="x", meta=DocMeta())
 
     async def call() -> TextDoc:
         return await Normalizer().normalize(raw)
@@ -46,6 +46,11 @@ def test_normalizer_base_raises_not_implemented() -> None:
 # chunker/overlap.py: single piece larger than max_overlap_len path
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 统一的测试用 Rule 列表 (与历史模块级 STEPS 等价)
+_OVERLAP_RULES = build_steps(
+    chunk_size=1000, max_size=8000, paragraph_chunk_deep=5, custom_reg=[]
+)
+
 
 def test_overlap_single_piece_larger_than_max_caps() -> None:
     """单片段本身 > max_overlap_len → 直接切片到 overlap_len。"""
@@ -53,6 +58,7 @@ def test_overlap_single_piece_larger_than_max_caps() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,
+        rules=_OVERLAP_RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -65,6 +71,7 @@ def test_overlap_zero_overlap_len_returns_empty() -> None:
     result = get_overlap_tail(
         text="段落内容。",
         step=10,
+        rules=_OVERLAP_RULES,
         chunk_size=100,
         overlap_len=0,
         max_overlap_len=40,
@@ -76,6 +83,7 @@ def test_overlap_step_out_of_bounds_returns_unchanged_text() -> None:
     result = get_overlap_tail(
         text="段落内容。另一段。",
         step=99,
+        rules=_OVERLAP_RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,
@@ -88,6 +96,7 @@ def test_overlap_accumulates_multiple_pieces() -> None:
     result = get_overlap_tail(
         text=text,
         step=11,  # 句号级 (STEPS[11]), 允许 overlap
+        rules=_OVERLAP_RULES,
         chunk_size=100,
         overlap_len=10,
         max_overlap_len=40,
@@ -100,6 +109,7 @@ def test_overlap_unicode_no_valid_chars_returns_full() -> None:
     result = get_overlap_tail(
         text=text,
         step=10,
+        rules=_OVERLAP_RULES,
         chunk_size=100,
         overlap_len=15,
         max_overlap_len=40,

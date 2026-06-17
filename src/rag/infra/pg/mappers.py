@@ -8,6 +8,7 @@ retriever / repository 直接调 mapper, 不再散落隐式映射。
   ───────────                    ─────────────────────────────────
   ``id``                         ``Chunk.id``
   ``dataset_id``                 ``Chunk.dataset_id``
+  ``document_id``                ``Chunk.document_id``
   ``text``                       ``Chunk.text``
   ``embedding``                  ``Chunk.embedding``
   ``modality``                   ``Chunk.modality``
@@ -15,9 +16,7 @@ retriever / repository 直接调 mapper, 不再散落隐式映射。
   ``parent_title``               ``Chunk.metadata.parent_title``
   ``chunk_index``                ``Chunk.metadata.chunk_index``
   ``filename``                   ``Chunk.metadata.filename``
-  ``created_at`` (Mixin)         ``Chunk.metadata.created_at``
   —                              ``Chunk.metadata.datasource`` (默认 ``"file"``, PG 不存)
-  —                              ``Chunk.metadata.custom_separator`` (默认 ``None``, PG 不存)
 """
 
 from __future__ import annotations
@@ -27,22 +26,23 @@ from typing import Literal, cast
 from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.infra.pg.models.chunk import ChunkModel
+from rag.infra.pg.models.document import (
+    DocumentModel,  # noqa: F401  # 注册到 Base.metadata
+)
 
 
 def chunk_model_to_domain(model: ChunkModel) -> DomainChunk:
     """``ChunkModel``（PG 行）转 ``domain.document.Chunk``（业务层）。"""
     metadata = DomainChunkMetadata(
-        dataset_id=model.dataset_id,
         datasource="file",  # PG schema 当前不持久化 datasource, 读路径取默认
         filename=model.filename,
         parent_title=model.parent_title,
         chunk_index=model.chunk_index,
-        custom_separator=None,  # PG schema 当前不持久化 custom_separator
-        created_at=model.created_at,
     )
     return DomainChunk(
         id=model.id,
         dataset_id=model.dataset_id,
+        document_id=model.document_id,
         text=model.text,
         modality=cast(Literal["text", "image_caption"], model.modality),
         image_path=model.image_path,
@@ -60,11 +60,12 @@ def domain_chunk_to_model(chunk: DomainChunk) -> ChunkModel:
     """``domain.document.Chunk``（业务层）转 ``ChunkModel``（PG 行）。
 
     写库前调用（例如 ingest 写库入口）。PG schema 不存的字段
-    （``datasource``、``custom_separator``）仅留业务侧, 不下推。
+    （``datasource``）仅留业务侧, 不下推。
     """
     return ChunkModel(
         id=chunk.id,
         dataset_id=chunk.dataset_id,
+        document_id=chunk.document_id,
         text=chunk.text,
         modality=chunk.modality,
         image_path=chunk.image_path,

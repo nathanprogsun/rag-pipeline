@@ -56,7 +56,7 @@ _FAKE_4C1T = cast(Tokenizer, FakeTokenizer(tokens_per_char=0.25))
 
 
 def _meta() -> ChunkMetadata:
-    return ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file")
+    return ChunkMetadata(datasource="file")
 
 
 def _doc(

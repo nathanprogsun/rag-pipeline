@@ -1,4 +1,4 @@
-"""Normalizer 协议: TextDoc → TextDoc (text + structure + images)。"""
+"""Normalizer 协议: TextDoc → TextDoc (text + structure)。"""
 
 from __future__ import annotations
 

@@ -135,7 +135,7 @@ async def test_make_llm_gen_calls_llm_with_messages() -> None:
             score=0.5,
             rank=0,
             source="vector",
-            metadata=ChunkMetadata(dataset_id=ds, datasource="file"),
+            metadata=ChunkMetadata(datasource="file"),
         )
     ]
     citations = [
@@ -176,7 +176,7 @@ async def test_make_llm_gen_handles_string_response() -> None:
             score=0.5,
             rank=0,
             source="vector",
-            metadata=ChunkMetadata(dataset_id=ds, datasource="file"),
+            metadata=ChunkMetadata(datasource="file"),
         )
     ]
     response = await gen(
@@ -220,7 +220,7 @@ async def test_make_llm_gen_llm_failure_returns_error_message() -> None:
             score=0.5,
             rank=0,
             source="vector",
-            metadata=ChunkMetadata(dataset_id=ds, datasource="file"),
+            metadata=ChunkMetadata(datasource="file"),
         )
     ]
     response = await gen(
@@ -261,7 +261,7 @@ async def test_pipeline_ainvoke_returns_search_result(
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),  # type: ignore[attr-defined]
+                metadata=ChunkMetadata(datasource="file"),
             )
         ]
 
@@ -317,7 +317,7 @@ async def test_pipeline_ainvoke_records_audit_when_req_audit_true(
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(dataset_id=self.dataset_id, datasource="file"),  # type: ignore[attr-defined]
+                metadata=ChunkMetadata(datasource="file"),
             )
         ]
 

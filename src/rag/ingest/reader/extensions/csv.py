@@ -8,7 +8,7 @@ from io import StringIO
 from typing import Final
 
 from rag.ingest.reader.extensions.base import wrap_encoding_error, wrap_parse_error
-from rag.ingest.reader.raw_text import UploadFileHandler, read_raw_text
+from rag.ingest.reader.raw_text import read_raw_text
 from rag.ingest.reader.types import FormatReaderResult
 from rag.ingest.types import DocMeta
 
@@ -71,29 +71,25 @@ async def csv_adapter(
     buffer: bytes,
     *,
     encoding: str = "utf-8",
-    upload_file: UploadFileHandler | None = None,
 ) -> FormatReaderResult:
     """将 csv 字节内容解析为 ``FormatReaderResult``。
 
     Args:
         buffer: csv 二进制内容。
         encoding: 文本编码, 默认 ``utf-8``。
-        upload_file: 透传给 ``read_raw_text`` 的异步上传回调, csv 场景一般用不到。
 
     Returns:
         ``FormatReaderResult``:
         - ``raw_text``: 解码后的 csv 原文。
         - ``format_text``: markdown 表格视图; 仅有表头也输出 (表头 + 分隔行),
           无表头返回 ``None``。
-        - ``meta.mime = "text/csv"``, ``extras = {"row_count": ...}``。
+        - ``meta.mime = "text/csv"``。
 
     Raises:
         RAGError: ``code=READER_ENCODING`` 解码失败; ``code=READER_PARSE`` 解析失败。
     """
     try:
-        raw_text = await read_raw_text(
-            buffer, encoding=encoding, upload_file=upload_file
-        )
+        raw_text = await read_raw_text(buffer, encoding=encoding)
     except UnicodeDecodeError as e:
         # ``read_raw_text`` 内部已有兜底, 此处是防御性捕获
         raise wrap_encoding_error("<buffer:csv>", e, "csv") from e
@@ -107,18 +103,8 @@ async def csv_adapter(
     except Exception as e:
         raise wrap_parse_error("<buffer:csv>", e, "csv") from e
 
-    # 按换行拆分的非空行数, 用于 dispatch 与审计
-    row_count = sum(1 for line in raw_text.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=format_text,
-        meta=DocMeta(
-            datasource="file",  # 占位, dispatch 覆盖
-            mime=CSV_MIME,
-            encoding=encoding,
-            size_bytes=len(buffer),
-        ),
-        images=[],
-        extras={"row_count": row_count},
+        meta=DocMeta(mime=CSV_MIME),
     )

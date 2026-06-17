@@ -96,6 +96,9 @@ def markdown_table_split(
 ) -> list[str]:
     """按 ``chunk_size`` 切分 Markdown 表格, 每块重复 ``header + sep`` 行。单行超长时按 cell 递归兜底。
 
+    NOTE: not used in current production pipeline (Chunker 走通用 Rule 链路过表格);
+    保留作为表格专用子能力, 仅测试覆盖。
+
     Args:
         text: 待切分的 Markdown 表格文本。
         chunk_size: 单块长度上限, 默认 1000。

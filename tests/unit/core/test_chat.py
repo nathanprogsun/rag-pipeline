@@ -25,6 +25,7 @@ class TestGetStructuredChatModel:
         mock_base.with_structured_output.assert_called_once_with(
             QueryPlan,
             method="function_calling",
+            include_raw=False,
         )
 
     def test_forwards_runtime_options_to_get_chat_model(self) -> None:

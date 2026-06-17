@@ -24,17 +24,15 @@ async def pdf_adapter(
     buffer: bytes,
     *,
     encoding: str = "utf-8",  # noqa: ARG001 — 保留签名 (PDF 是二进制)
-    upload_file: object | None = None,  # noqa: ARG001 — PDF 不抽图, 保留签名
 ) -> FormatReaderResult:
     """将 PDF 字节内容解析为 ``FormatReaderResult``。
 
     Args:
         buffer: PDF 二进制内容。
         encoding: 保留签名; PDF 是二进制, 无编码概念。
-        upload_file: 保留签名; PDF 不抽图。
 
     Returns:
-        ``FormatReaderResult { raw_text, format_text=None, meta, images=[] }``。
+        ``FormatReaderResult { raw_text, format_text=None, meta }``。
 
     Raises:
         RAGError: ``code=READER_PARSE`` —— pypdf 解析失败 (损坏 / 加密) 时包装。
@@ -54,19 +52,11 @@ async def pdf_adapter(
 
     raw_text = postprocess_lite_parse_pages(page_texts)
 
-    paragraph_count = sum(1 for line in raw_text.split("\n") if line.strip())
-
     return FormatReaderResult(
         raw_text=raw_text,
         format_text=None,
-        images=[],
-        extras={},
         meta=DocMeta(
-            datasource="file",  # 占位, dispatch 覆盖
             mime=PDF_MIME,
-            encoding=encoding,  # 保留传入, postprocess 按 utf-8 处理
-            size_bytes=len(buffer),
             page_count=len(all_pages),
-            paragraph_count=paragraph_count,
         ),
     )

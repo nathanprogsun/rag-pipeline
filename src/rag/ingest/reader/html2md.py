@@ -4,14 +4,9 @@
  - 引擎: `markdownify` (`Turndown` 在 Python 端的最近似实现)
  - 删除标签: `i` / `script` / `iframe` / `style`
  - 媒体 (`video` / `source` / `audio`) → `[src](src)`, 优先自身 src, 否则第一个 `<source>` 的 src
- - base64 图片预处理:
-   - 有 `upload_file`: 异步并发上传 (Semaphore=5) 拿 key, 替换 src
-   - 无 `upload_file`: src 置空, 避免大体积 base64 进入 markdown
+ - base64 图片: src 置空, 避免大体积 base64 进入 markdown
  - 超大 HTML: `len(html) > MAX_HTML_TRANSFORM_CHARS` → 原样返回
- - 异常处理:
-   - 单图 base64 上传失败 → 单图降级 (空 src), 不影响其他图与正文
-   - 整个转换抛错 + 无 `upload_file` → log warning + 返回 ``""``
-   - 整个转换抛错 + 有 `upload_file` → 异常向上抛 (RAGError 由上层 wrap)
+ - 异常处理: 转换抛错 → log warning + 返回 ``""``
 
 `markdownify` 的 `strong_em_symbol` 同时控制 strong 和 em, 不能分别给 `_` / `**`。
 本模块先用 `_` 让 `markdownify` 输出 `__x__` 形式, 再在后处理阶段把
@@ -20,8 +15,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import logging
 import re
 from html import unescape
@@ -30,19 +23,10 @@ from typing import Final, cast
 from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify as _md
 
-from rag.ingest.reader.types import (
-    UploadedFileResult,
-    UploadFileHandler,
-    mime_to_extension,
-)
-
 logger = logging.getLogger(__name__)
 
 # 超大 HTML 直接原样返回, 不走 markdownify
 MAX_HTML_TRANSFORM_CHARS: Final[int] = 1_000_000
-
-# base64 图片上传并发度
-_BASE64_UPLOAD_CONCURRENCY: Final[int] = 5
 
 # 匹配 `<img ... src=("|')data:<mime>;base64,<data>\1 ...>`
 _BASE64_SRC_RE: Final[re.Pattern[str]] = re.compile(
@@ -51,20 +35,14 @@ _BASE64_SRC_RE: Final[re.Pattern[str]] = re.compile(
 )
 
 
-async def html_to_md(
-    html: str,
-    upload_file: UploadFileHandler | None = None,
-) -> str:
+async def html_to_md(html: str) -> str:
     """HTML 字符串 → markdown 字符串 (async)。
 
     Args:
         html: 输入 HTML (可能含 base64 图片、media 标签、script 等)。
-        upload_file: 可选异步上传回调, 签名 `(filename, mime, bytes) -> {"key": str}`。
-            传 None 时 base64 图片 src 会被置空 (避免大体积 base64 进入 markdown)。
 
     Returns:
-        转换后的 markdown; 失败 (无 `upload_file`) 返回 `""`; 超大 HTML 原样返回。
-        失败且有 `upload_file` 时, 异常向上抛。
+        转换后的 markdown; 失败返回 `""`; 超大 HTML 原样返回。
     """
     if not html:
         return ""
@@ -74,8 +52,8 @@ async def html_to_md(
         return html
 
     try:
-        # base64 图片预处理 (上传 or 清空 src) — async await
-        processed = await _process_base64_images(html, upload_file=upload_file)
+        # base64 图片预处理: src 置空, 避免大体积 base64 进入 markdown
+        processed = _strip_base64_images(html)
 
         # 删除 i / script / iframe / style; media → <a href="src">src</a>
         processed = _preprocess_media_and_strip(processed)
@@ -86,78 +64,18 @@ async def html_to_md(
         # 后处理
         return simple_markdown_text(md)
     except Exception as e:
-        if upload_file is not None:
-            raise
-        logger.warning("html_to_md failed (no upload_file, returning ''): %s", e)
+        logger.warning("html_to_md failed (returning ''): %s", e)
         return ""
 
 
 # ---------------------------------------------------------------------------
-# base64 图片预处理
+# base64 图片处理
 # ---------------------------------------------------------------------------
 
 
-async def _process_base64_images(
-    html: str,
-    *,
-    upload_file: UploadFileHandler | None,
-) -> str:
-    """把 `<img src="data:...;base64,...">` 替换为上传后的 key (或空 src)。
-
-    替换粒度是 `src="..."` 整个属性, 不动其他属性 (alt / class / etc);
-    避免重复解码整个 base64, 直接复用正则捕获的 base64 data。
-    """
-    matches = list(_BASE64_SRC_RE.finditer(html))
-    if not matches:
-        return html
-
-    if upload_file is None:
-        return _BASE64_SRC_RE.sub(r"src=\1\1", html)
-
-    # 直接 await 上传协程, 不嵌套 asyncio.run, 与上层 async adapter 保持一致。
-    replacements: list[str] = await _upload_base64_concurrent(matches, upload_file)
-
-    # 按 index 顺序回填, 避免 replaceAll 重复匹配
-    out: list[str] = []
-    cursor = 0
-    for match, replacement in zip(matches, replacements, strict=True):
-        out.append(html[cursor : match.start()])
-        out.append(replacement)
-        cursor = match.end()
-    out.append(html[cursor:])
-    return "".join(out)
-
-
-async def _upload_base64_concurrent(
-    matches: list[re.Match[str]],
-    upload_file: UploadFileHandler,
-) -> list[str]:
-    """并发上传所有 base64 图片, 控制 Semaphore=5。"""
-    sem = asyncio.Semaphore(_BASE64_UPLOAD_CONCURRENCY)
-
-    async def _one(match: re.Match[str]) -> str:
-        quote = match.group(1)
-        mime = match.group(2)
-        b64 = match.group(3)
-        async with sem:
-            try:
-                image_bytes = base64.b64decode(b64, validate=True)
-            except Exception as e:
-                logger.warning("base64 decode failed (mime=%s): %s", mime, e)
-                return f"src={quote}{quote}"
-            ext = mime_to_extension(mime)
-            filename = f"html_base64_{abs(hash((mime, b64[:32]))) & 0xFFFFFFFF:x}.{ext}"
-            try:
-                result: UploadedFileResult = await upload_file(
-                    filename, mime, image_bytes
-                )
-            except Exception as e:
-                logger.warning("base64 upload failed (mime=%s): %s", mime, e)
-                return f"src={quote}{quote}"
-            key = result.get("key", "") if isinstance(result, dict) else ""
-            return f"src={quote}{key}{quote}" if key else f"src={quote}{quote}"
-
-    return await asyncio.gather(*(_one(m) for m in matches))
+def _strip_base64_images(html: str) -> str:
+    """把 ``<img src="data:...;base64,...">`` 替换为空 src。"""
+    return _BASE64_SRC_RE.sub(r"src=\1\1", html)
 
 
 # ---------------------------------------------------------------------------

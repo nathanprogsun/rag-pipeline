@@ -70,12 +70,14 @@ def _domain_chunk(
     chunk_index: int = 0,
     text: str | None = None,
     dataset_id: uuid.UUID | None = None,
+    document_id: uuid.UUID | None = None,
     modality: str = "text",
 ) -> DomainChunk:
     """Domain Chunk shape returned by ChunkRepository.get_siblings."""
     return DomainChunk(
         id=uuid.UUID(chunk_id_str),
         dataset_id=dataset_id or uuid.uuid4(),
+        document_id=document_id or uuid.uuid4(),
         text=text or f"text {chunk_index} for {chunk_id_str}",
         modality=modality,  # type: ignore[arg-type]
         metadata=_meta(parent_title=parent_title, chunk_index=chunk_index),

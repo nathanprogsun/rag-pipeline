@@ -27,6 +27,7 @@ from rag.config import settings
 from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
+from rag.infra.pg.models.document import DocumentModel
 
 # 与 settings.openai_embedding_dim 对齐; 8 个 test_*_live.py 各定义一份, 沉到此处
 EMBED_DIM: int = settings.openai_embedding_dim
@@ -73,6 +74,8 @@ async def seed_chunks(
     chunk_indices: list[int] | None = None,
     modalities: list[str] | None = None,
     image_paths: list[str | None] | None = None,
+    document_id: uuid.UUID | None = None,
+    filename: str | None = None,
 ) -> list[ChunkModel]:
     """真实 embedding + 可选 tsvector 填充, 批量入库 chunk。
 
@@ -87,10 +90,32 @@ async def seed_chunks(
         chunk_indices: 与 ``texts`` 等长的 ``chunk_index`` 列表。
         modalities: 与 ``texts`` 等长的 modality 列表。
         image_paths: 与 ``texts`` 等长的 ``image_path`` 列表。
+        document_id: 显式指定 chunk 所属 document 行; 缺省时 helper 自动
+            upsert 一个 (filename 必传, 否则退化为随机 UUID — 仅在测试 chunk
+            关系本身时可用)。
+        filename: 与 document 行关联的 filename; 仅在未传 ``document_id`` 时
+            必传。
 
     Returns:
         新建的 ``ChunkModel`` 列表 (含分配 id 与 embedding)。
     """
+    if document_id is None:
+        if filename is None:
+            # 退化路径: 测试不关心 document 关系, 给一个 random UUID。
+            # 注意: 该 UUID 不对应实际 document 行, 若外层 DB 有 FK 校验
+            # 会失败 — 真实测试场景应显式传 filename。
+            document_id = uuid.uuid4()
+        else:
+            doc = DocumentModel(
+                dataset_id=dataset_id,
+                filename=filename,
+                status="completed",
+                total_chunks=len(texts),
+            )
+            db_session.add(doc)
+            await db_session.flush()
+            document_id = doc.id
+
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     n = len(texts)
     titles = parent_titles if parent_titles is not None else [""] * n
@@ -101,6 +126,7 @@ async def seed_chunks(
     for i, (content, emb) in enumerate(zip(texts, embeddings, strict=True)):
         chunk = ChunkModel(
             dataset_id=dataset_id,
+            document_id=document_id,
             text=content,
             embedding=emb,
             parent_title=titles[i],

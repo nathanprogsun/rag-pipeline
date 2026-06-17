@@ -94,7 +94,7 @@ def test_audit_record_from_search_result_intermediate_count() -> None:
             score=0.5,
             rank=0,
             source="vector",
-            metadata=ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file"),
+            metadata=ChunkMetadata(datasource="file"),
         )
         for i in range(3)
     ]

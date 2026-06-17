@@ -63,7 +63,7 @@ def _scored_doc(
         rank=0,
         source="vector",
         modality=modality,  # type: ignore[arg-type]
-        metadata=ChunkMetadata(dataset_id=uuid.uuid4(), datasource="file"),
+        metadata=ChunkMetadata(datasource="file"),
         score_breakdown=breakdown or {"vector": score},
     )
 

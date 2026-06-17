@@ -6,27 +6,17 @@ from typing import Protocol
 
 from rag.error_codes import ReaderErrorCode
 from rag.exception import RAGError
-from rag.ingest.reader.types import (
-    FormatReaderResult,
-    UploadFileHandler,
-)
-from rag.ingest.reader.types import (
-    UploadedFileResult as UploadedFileResult,
-)
-
-# 统一从 reader.types 导入并 re-export, 避免下游从 extensions.base 导入时
-# 与类型定义发生漂移。
+from rag.ingest.reader.types import FormatReaderResult
 
 
 class FormatAdapter(Protocol):
-    """格式适配器协议: 字节 + 编码 + 上传回调 → ``FormatReaderResult``。"""
+    """格式适配器协议: 字节 + 编码 → ``FormatReaderResult``。"""
 
     async def __call__(
         self,
         buffer: bytes,
         *,
         encoding: str = "utf-8",
-        upload_file: UploadFileHandler | None = None,
     ) -> FormatReaderResult: ...
 
 
