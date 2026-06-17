@@ -18,10 +18,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
-from rag.domain.search import Citation, SearchRequest, SearchResult
+from rag.domain.search import Citation, ContextConfig, SearchRequest, SearchResult
 from rag.search.orchestrator import (
     SearchPipeline,
     _dedup_by_chunk_id,
+    _dedup_by_document_id,
 )
 
 # ---------- Fixtures ----------
@@ -38,24 +39,32 @@ def _doc(
     chunk_id_str: str,
     *,
     dataset_id: uuid.UUID | None = None,
+    document_id: uuid.UUID | None = None,
     score: float = 0.5,
     source: str = "vector",
     text: str | None = None,
+    score_breakdown: dict[str, float] | None = None,
+    rerank_score: float | None = None,
 ) -> ScoredDocument:
+    bd = score_breakdown if score_breakdown is not None else {source: score}
     return ScoredDocument(
         chunk_id=uuid.UUID(chunk_id_str),
         dataset_id=dataset_id or uuid.uuid4(),
+        document_id=document_id,
         text=text or f"text for {chunk_id_str}",
         score=score,
         rank=0,
         source=source,  # type: ignore[arg-type]
         metadata=_meta(),
+        score_breakdown=bd,
+        rerank_score=rerank_score,
     )
 
 
 A = "00000000-0000-0000-0000-000000000001"
 B = "00000000-0000-0000-0000-000000000002"
 C = "00000000-0000-0000-0000-000000000003"
+D = "00000000-0000-0000-0000-000000000004"
 
 
 def _make_subgraph(
@@ -115,6 +124,28 @@ def test_init_default_rrf_k_is_60() -> None:
 
 
 # ---------- ainvoke: identity / variants ----------
+
+
+async def test_ainvoke_skips_query_ext_when_context_disabled() -> None:
+    """context.query_extension=False → 不调用 query_ext, 仅用原 query。"""
+    ds_id = uuid.uuid4()
+    sg = _make_subgraph(
+        dataset_id=ds_id,
+        hits_by_query={"python": [_doc(A, dataset_id=ds_id, score=0.9)]},
+    )
+    qe = _make_query_ext(variants=["v1", "v2", "v3"])
+    orch = SearchPipeline(subgraphs={ds_id: sg}, query_ext=qe)
+    req = SearchRequest(
+        query="python",
+        dataset_ids=[ds_id],
+        context=ContextConfig(query_extension=False),
+    )
+
+    await orch.ainvoke(req)
+
+    qe.assert_not_called()
+    assert sg.ainvoke.await_count == 1
+    assert sg.ainvoke.call_args.args[0] == "python"
 
 
 async def test_ainvoke_identity_when_query_ext_is_none() -> None:
@@ -556,3 +587,40 @@ def test_dedup_by_chunk_id_preserves_order() -> None:
 
 def test_dedup_by_chunk_id_empty() -> None:
     assert _dedup_by_chunk_id([]) == []
+
+
+def test_dedup_by_document_id_keeps_highest_ranked_chunk() -> None:
+    """同一 document 只保留 rerank/vector 最高的一条。"""
+    doc_id = uuid.uuid4()
+    low = _doc(
+        A,
+        document_id=doc_id,
+        score=0.02,
+        score_breakdown={"vector": 0.3},
+        rerank_score=0.4,
+    )
+    high = _doc(
+        B,
+        document_id=doc_id,
+        score=0.03,
+        score_breakdown={"vector": 0.5},
+        rerank_score=0.9,
+    )
+    other = _doc(C, document_id=uuid.uuid4())
+
+    deduped = _dedup_by_document_id([low, high, other])
+
+    assert [d.chunk_id for d in deduped] == [uuid.UUID(B), uuid.UUID(C)]
+
+
+def test_dedup_by_document_id_preserves_winner_order() -> None:
+    doc1 = uuid.uuid4()
+    doc2 = uuid.uuid4()
+    d1a = _doc(A, document_id=doc1, rerank_score=0.2)
+    d2a = _doc(B, document_id=doc2, rerank_score=0.8)
+    d1b = _doc(C, document_id=doc1, rerank_score=0.9)
+    d2b = _doc(D, document_id=doc2, rerank_score=0.1)
+
+    deduped = _dedup_by_document_id([d1a, d2a, d1b, d2b])
+
+    assert [d.chunk_id for d in deduped] == [uuid.UUID(B), uuid.UUID(C)]

@@ -35,6 +35,8 @@ def _doc(
     score: float = 0.5,
     modality: str = "text",
     dataset_id: uuid.UUID | None = None,
+    score_breakdown: dict[str, float] | None = None,
+    rerank_score: float | None = None,
 ) -> ScoredDocument:
     return ScoredDocument(
         chunk_id=uuid.UUID(chunk_id_str),
@@ -46,6 +48,8 @@ def _doc(
         modality=modality,  # type: ignore[arg-type]
         image_path=image_path,
         metadata=_meta(),
+        score_breakdown=score_breakdown or {},
+        rerank_score=rerank_score,
     )
 
 
@@ -73,6 +77,22 @@ def test_simple_cite_single_doc_indexed_1() -> None:
     result = cite(docs, _req())
     assert len(result) == 1
     assert result[0].source_name == "src-1"
+
+
+def test_simple_cite_propagates_score_breakdown() -> None:
+    cite = SimpleCite()
+    docs = [
+        _doc(
+            A,
+            score=0.016,
+            score_breakdown={"vector": 0.42, "fulltext": 0.09, "rerank": 0.73},
+            rerank_score=0.73,
+        )
+    ]
+    result = cite(docs, _req())
+    assert result[0].score == 0.016
+    assert result[0].score_breakdown["vector"] == 0.42
+    assert result[0].rerank_score == 0.73
 
 
 def test_simple_cite_preserves_doc_order() -> None:

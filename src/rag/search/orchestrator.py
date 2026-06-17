@@ -143,7 +143,7 @@ class SearchPipeline:
         if self.rerank is not None:
             fused = await self.rerank(fused, req)
 
-        # 阶段 7: 过滤 (chunk_id 去重 → 阈值 → token 预算)
+        # 阶段 7: 过滤 (chunk_id 去重 → 阈值 → document 去重 → token 预算)
         fused = _dedup_by_chunk_id(fused)
         if self.filter_score_threshold is not None and fused:
             fused, _ = filter_by_score(
@@ -151,6 +151,7 @@ class SearchPipeline:
                 threshold=self.filter_score_threshold,
                 search_mode="mixed",
             )
+        fused = _dedup_by_document_id(fused)
         if fused:
             fused = filter_by_token_budget(fused, max_tokens=self.token_budget)
 
@@ -182,8 +183,8 @@ class SearchPipeline:
     # ---- Stage 辅助方法 ----
 
     def _extend_query(self, req: SearchRequest, warnings: list[str]) -> list[str]:
-        """阶段 1: 产出 query variants。None → [req.query] identity。"""
-        if self.query_ext is None:
+        """阶段 1: 产出 query variants; 关闭扩展或组件缺失时仅用原 query。"""
+        if not req.context.query_extension or self.query_ext is None:
             return [req.query]
         try:
             ext = self.query_ext(
@@ -243,6 +244,44 @@ class SearchPipeline:
 
 
 # ---------- 纯辅助函数 ----------
+
+
+def _doc_rank_key(doc: ScoredDocument) -> tuple[float, float, float]:
+    """document 去重时的排序键: rerank → vector → RRF。"""
+    bd = doc.score_breakdown
+    rerank = (
+        doc.rerank_score if doc.rerank_score is not None else bd.get("rerank", -1.0)
+    )
+    return (rerank, bd.get("vector", -1.0), doc.score)
+
+
+def _dedup_by_document_id(docs: list[ScoredDocument]) -> list[ScoredDocument]:
+    """同一 document_id 只保留得分最高的一条; 无 document_id 的 doc 原样保留。"""
+    if not docs:
+        return []
+
+    best: dict[uuid.UUID, ScoredDocument] = {}
+    for d in docs:
+        if d.document_id is None:
+            continue
+        existing = best.get(d.document_id)
+        if existing is None or _doc_rank_key(d) > _doc_rank_key(existing):
+            best[d.document_id] = d
+
+    seen_doc: set[uuid.UUID] = set()
+    out: list[ScoredDocument] = []
+    for d in docs:
+        if d.document_id is None:
+            out.append(d)
+            continue
+        if d.document_id in seen_doc:
+            continue
+        winner = best[d.document_id]
+        if winner.chunk_id != d.chunk_id:
+            continue
+        out.append(d)
+        seen_doc.add(d.document_id)
+    return out
 
 
 def _dedup_by_chunk_id(docs: list[ScoredDocument]) -> list[ScoredDocument]:

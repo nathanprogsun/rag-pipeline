@@ -12,11 +12,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import uuid
 
 from langchain_core.embeddings import Embeddings
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.config import settings
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 PERSIST_INSERT_FAILED: str = "PERSIST_INSERT_FAILED"
 PERSIST_EMBED_FAILED: str = "PERSIST_EMBED_FAILED"
+DEFAULT_EMBED_BATCH_TIMEOUT_SEC: float = 180.0
 
 # (enumerate index, ingest chunk, embedding vector)
 EmbeddedChunk = tuple[int, IngestChunk, list[float]]
@@ -60,21 +63,37 @@ async def _create_dataset_once(
     session: AsyncSession,
     dataset_name: str | None,
 ) -> uuid.UUID:
-    """``ingest_many`` 顶部一次性创建 dataset。"""
+    """``ingest_many`` 顶部按 ``dataset_name`` get-or-create dataset (幂等重跑)。"""
     if dataset_name is None:
         raise RAGError(
             code=IngestErrorCode.PERSIST_INVALID_ARGS,
             message="create_dataset=True 必须配 dataset_name",
         )
     repo = DatasetRepository(session)
-    ds = await repo.create(
-        name=dataset_name,
-        embed_model=settings.openai_embedding_model,
-        embed_dim=settings.openai_embedding_dim,
-    )
-    await session.commit()
-    logger.info("persist.dataset_created id=%s name=%s", ds.id, ds.name)
-    return ds.id
+    existing = await repo.get_by_name(dataset_name)
+    if existing is not None:
+        logger.info("persist.dataset_reused id=%s name=%s", existing.id, existing.name)
+        return existing.id
+    try:
+        ds = await repo.create(
+            name=dataset_name,
+            embed_model=settings.openai_embedding_model,
+            embed_dim=settings.openai_embedding_dim,
+        )
+        await session.commit()
+        logger.info("persist.dataset_created id=%s name=%s", ds.id, ds.name)
+        return ds.id
+    except IntegrityError:
+        await session.rollback()
+        raced = await repo.get_by_name(dataset_name)
+        if raced is None:
+            raise
+        logger.info(
+            "persist.dataset_reused id=%s name=%s (after race)",
+            raced.id,
+            raced.name,
+        )
+        return raced.id
 
 
 class PersistResult:
@@ -222,9 +241,13 @@ async def _run_embed_batch(
     texts: list[str],
     *,
     sem: LLMSemaphore,
+    timeout_sec: float,
 ) -> list[list[float]]:
-    """在 embedding 通道信号量保护下调用 ``aembed_documents``。"""
-    return await sem.run("embedding", embedder.aembed_documents(texts))
+    """在 embedding 通道信号量保护下调用 ``aembed_documents``, 带批次超时。"""
+    return await asyncio.wait_for(
+        sem.run("embedding", embedder.aembed_documents(texts)),
+        timeout=timeout_sec,
+    )
 
 
 async def embed_all_pending(
@@ -234,6 +257,7 @@ async def embed_all_pending(
     embedder: Embeddings,
     embed_batch_size: int,
     sem: LLMSemaphore | None = None,
+    embed_timeout_sec: float = DEFAULT_EMBED_BATCH_TIMEOUT_SEC,
 ) -> list[EmbeddedChunk]:
     """无 session: 对待处理 chunk 分批 embedding, 返回 (index, chunk, vector) 列表。"""
     pending = _pending_chunks(doc, chunks)
@@ -261,7 +285,31 @@ async def embed_all_pending(
             len(batch),
         )
         try:
-            vectors = await _run_embed_batch(embedder, batch_texts, sem=lane_sem)
+            vectors = await _run_embed_batch(
+                embedder,
+                batch_texts,
+                sem=lane_sem,
+                timeout_sec=embed_timeout_sec,
+            )
+        except TimeoutError as e:
+            await _mark_document_failed(doc.document_id, PERSIST_EMBED_FAILED)
+            logger.warning(
+                "persist.embed.timeout document_id=%s filename=%s "
+                "batch_offset=%d batch_size=%d timeout_sec=%.0f",
+                doc.document_id,
+                doc.filename,
+                batch_start,
+                len(batch),
+                embed_timeout_sec,
+            )
+            raise RAGError(
+                code=IngestErrorCode.PERSIST_EMBED_FAILED,
+                message=(
+                    f"embedding 超时 (batch {batch_start}"
+                    f"-{batch_start + len(batch)}, "
+                    f"limit={embed_timeout_sec:.0f}s)"
+                ),
+            ) from e
         except Exception as e:
             await _mark_document_failed(doc.document_id, PERSIST_EMBED_FAILED)
             raise RAGError(
@@ -338,6 +386,7 @@ async def persist(
     dataset_id: uuid.UUID,
     embedder: Embeddings | None = None,
     embed_batch_size: int = 256,
+    embed_timeout_sec: float = DEFAULT_EMBED_BATCH_TIMEOUT_SEC,
     sem: LLMSemaphore | None = None,
 ) -> PersistResult:
     """把 ``IngestResult.chunks`` 写入 PG (单 document)。
@@ -386,6 +435,7 @@ async def persist(
         result.chunks,
         embedder=embedder,
         embed_batch_size=embed_batch_size,
+        embed_timeout_sec=embed_timeout_sec,
         sem=sem,
     )
     new_chunk_count = await insert_chunks(doc, embedded)

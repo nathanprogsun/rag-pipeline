@@ -60,6 +60,24 @@ class DatasetRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_name(
+        self, name: str, *, include_deleted: bool = False
+    ) -> DatasetModel | None:
+        """按展示名取 dataset; 不存在或已软删返回 None。
+
+        Args:
+            name: dataset 展示名 (``datasets.name`` UNIQUE)。
+            include_deleted: True 时返回软删除的 dataset, False 时过滤。
+
+        Returns:
+            `DatasetModel` 或 None。
+        """
+        stmt = select(DatasetModel).where(DatasetModel.name == name)
+        if not include_deleted:
+            stmt = stmt.where(DatasetModel.deleted_at.is_(None))
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         *,

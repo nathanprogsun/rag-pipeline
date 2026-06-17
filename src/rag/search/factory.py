@@ -15,10 +15,12 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from rag.config import settings
 from rag.domain.search import SearchRequest, SearchResult
 from rag.infra.observability.audit import AuditRecord
 from rag.infra.pg.fulltext_store import FulltextRetriever
 from rag.infra.pg.vector_store import VectorRetriever
+from rag.search.extension.query_ext import QueryExtensionRunnable
 from rag.search.generate.answer import make_llm_gen
 from rag.search.orchestrator import SearchPipeline
 from rag.search.post.cite import SimpleCite
@@ -99,9 +101,15 @@ class _SearchPipelineImpl:
 
         gen_cb = make_llm_gen(self.deps.llm)
 
+        query_ext = QueryExtensionRunnable(
+            model=settings.openai_model,
+            k=req.context.max_query_variants,
+        )
+
         return SearchPipeline(
             subgraphs=subgraphs,
-            filter_score_threshold=None,
+            query_ext=query_ext,
+            filter_score_threshold=req.retrieval.score_threshold,
             token_budget=self.deps.token_budget,
             rerank=rerank_cb,
             parent_doc=NoOpParentDoc(),

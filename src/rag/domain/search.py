@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from rag.domain.document import ScoredDocument
 
@@ -89,6 +89,8 @@ class Citation(BaseModel):
     content: str
     image_path: str | None = None
     score: float
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
+    rerank_score: float | None = None
     position: int | None = None
     update_time: datetime | None = None
 

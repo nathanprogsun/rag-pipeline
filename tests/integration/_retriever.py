@@ -84,6 +84,7 @@ class RepoRetriever(Runnable):
                 ScoredDocument(
                     chunk_id=chunk.id,
                     dataset_id=chunk.dataset_id,
+                    document_id=chunk.document_id,
                     text=chunk.text,
                     score=score,
                     rank=i,

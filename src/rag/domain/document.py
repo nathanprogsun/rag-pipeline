@@ -77,6 +77,7 @@ class ScoredDocument(BaseModel):
 
     chunk_id: uuid.UUID
     dataset_id: uuid.UUID
+    document_id: uuid.UUID | None = None
     text: str
     score: float
     rank: int

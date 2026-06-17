@@ -35,7 +35,7 @@ _CLI_HELP: Final[str] = """\
 
 \b
 Options:
-  --dataset-name STR      新建 dataset 并落库 (需 OPENAI_EMBEDDING_API_KEY)
+  --dataset-name STR      按名称 get-or-create dataset 并落库 (需 OPENAI_EMBEDDING_API_KEY)
   --dataset-id UUID       向已有 dataset 追加文档 (与 --dataset-name 互斥)
 
 \b
@@ -201,7 +201,7 @@ def ingest_cmd(
     ],
     dataset_name: Annotated[
         str | None,
-        typer.Option("--dataset-name", help="新建 dataset 并落库。"),
+        typer.Option("--dataset-name", help="按名称 get-or-create dataset 并落库。"),
     ] = None,
     dataset_id: Annotated[
         uuid.UUID | None,
