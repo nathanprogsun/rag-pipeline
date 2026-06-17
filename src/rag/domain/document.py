@@ -43,6 +43,21 @@ class Chunk(BaseModel):
     embedding: list[float] | None = None
 
 
+class DocumentDto(BaseModel):
+    """单 document persist 工单: document 已落库后的可跨 session 传递上下文。
+
+    不含 ORM / SQLAlchemy 对象; ``pending`` 的 chunk 正文由 ``IngestResult.chunks`` 提供,
+    本 DTO 只携带 identity + resume 元数据。
+    """
+
+    document_id: uuid.UUID
+    dataset_id: uuid.UUID
+    dataset_name: str
+    filename: str | None
+    existing_chunk_indexes: set[int] = Field(default_factory=set)
+    is_resume: bool = False
+
+
 class ScoredDocument(BaseModel):
     """召回结果。RRF 公式需要 `score` + `rank` 同时存在。
 

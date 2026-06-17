@@ -261,7 +261,7 @@ async def test_pipeline_ainvoke_returns_search_result(
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(datasource="file"),  # type: ignore[attr-defined]
+                metadata=ChunkMetadata(datasource="file"),
             )
         ]
 
@@ -317,7 +317,7 @@ async def test_pipeline_ainvoke_records_audit_when_req_audit_true(
                 score=0.9,
                 rank=0,
                 source="vector",
-                metadata=ChunkMetadata(datasource="file"),  # type: ignore[attr-defined]
+                metadata=ChunkMetadata(datasource="file"),
             )
         ]
 

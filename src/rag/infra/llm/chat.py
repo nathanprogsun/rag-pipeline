@@ -12,10 +12,16 @@ logger = logging.getLogger(__name__)
 
 _LLM_TIMEOUT_SECONDS = 30.0
 
-# 支持 reasoning_split 的模型前缀。reasoning_split 是 OpenAI 兼容层 (DeepSeek 等)
+# 支持 reasoning_split 的模型前缀。reasoning_split 是 OpenAI 兼容层 (DeepSeek / MiniMax 等)
 # 把 `reasoning_content` 分离到独立字段的开关, 只有 reasoning 模型才需要打开;
 # 对普通 chat 模型传这个 extra_body 会污染请求体 / 触发上游 4xx。
-_REASONING_MODEL_PREFIXES: tuple[str, ...] = ("o1", "o3", "deepseek-reasoner")
+_REASONING_MODEL_PREFIXES: tuple[str, ...] = (
+    "o1",
+    "o3",
+    "deepseek-reasoner",
+    "MiniMax",
+    "minimax",
+)
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -75,6 +81,8 @@ def get_structured_chat_model(
     base_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
+    *,
+    include_raw: bool = False,
 ) -> Runnable:
     """在基础 chat model 上叠加 `function_calling` 结构化输出。
 
@@ -86,6 +94,7 @@ def get_structured_chat_model(
         base_url: 覆盖默认 base url。
         api_key: 覆盖默认 API key。
         model: 模型名, 为 None 时使用 `settings.openai_model`。
+        include_raw: 为 True 时返回 `{parsed, parsing_error, raw}` 字典, 便于诊断 tool_call 缺失。
 
     Returns:
         可链式调用的结构化输出 `Runnable`。
@@ -98,4 +107,8 @@ def get_structured_chat_model(
         base_url=base_url,
         api_key=api_key,
     )
-    return base.with_structured_output(schema, method="function_calling")
+    return base.with_structured_output(
+        schema,
+        method="function_calling",
+        include_raw=include_raw,
+    )

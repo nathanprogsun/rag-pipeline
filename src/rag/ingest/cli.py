@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import uuid
 from typing import Annotated, Final
 
@@ -26,6 +27,8 @@ _YELLOW: Final[str] = "\033[33m"
 _RESET: Final[str] = "\033[0m"
 _PREVIEW_LEN: Final[int] = 80
 _SEPARATOR: Final[str] = "=" * 60
+_LOG_FORMAT: Final[str] = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_DATEFMT: Final[str] = "%H:%M:%S"
 
 _CLI_HELP: Final[str] = """\
 读取本地文件，解析、切块、(可选) 写入 PG 并打印到 stdout。
@@ -44,6 +47,28 @@ Examples:
 """
 
 app = typer.Typer(name="rag-ingest", add_completion=False)
+
+
+def configure_ingest_logging(*, quiet: bool = False) -> None:
+    """为 CLI 配置 stderr 日志; 默认 INFO, 便于 bulk ingest 时观察进度。
+
+    各子模块已有 ``logger.info``, 此前未调用本函数时默认级别为 WARNING, 运行中几乎无输出。
+    """
+    level = logging.WARNING if quiet else logging.INFO
+    root = logging.getLogger()
+    if root.handlers:
+        root.setLevel(level)
+        return
+    logging.basicConfig(
+        level=level,
+        format=_LOG_FORMAT,
+        datefmt=_LOG_DATEFMT,
+        stream=sys.stderr,
+    )
+    # 第三方库降噪 (HF Hub 未认证警告等)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 
 def _render_result(result: IngestResult) -> None:
@@ -130,7 +155,13 @@ def run_ingest(
     targets: list[str],
     *,
     persist_config: PersistConfig | None = None,
+    quiet: bool = False,
 ) -> None:
+    configure_ingest_logging(quiet=quiet)
+    logger.info(
+        "ingest.cli.start targets=%s persist=%s", targets, persist_config is not None
+    )
+
     if not settings.openai_api_key.get_secret_value().strip():
         typer.echo(
             f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
@@ -176,6 +207,10 @@ def ingest_cmd(
         uuid.UUID | None,
         typer.Option("--dataset-id", help="向已有 dataset 追加文档。"),
     ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="仅输出 WARNING 及以上日志。"),
+    ] = False,
 ) -> None:
     if dataset_name is not None and dataset_id is not None:
         typer.echo(
@@ -194,7 +229,7 @@ def ingest_cmd(
     elif dataset_id is not None:
         persist_config = PersistConfig(dataset_id=dataset_id, enabled=True)
 
-    run_ingest(targets, persist_config=persist_config)
+    run_ingest(targets, persist_config=persist_config, quiet=quiet)
 
 
 def main() -> None:

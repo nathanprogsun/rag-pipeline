@@ -86,15 +86,12 @@ class IngestPipeline:
         *,
         max_concurrent: int = 8,
     ) -> None:
-        """Args:
-        max_concurrent: 单批并发上限, 防止 1000 文件目录撑爆 PG pool + embedder。
-            默认 8 与 ``database.py:pool_size=10`` 留 2 余量。
-        """
         if max_concurrent < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
         self.chunker = chunker
         self.normalizer: Normalizer = normalizer or NoOpNormalizer()
         self.persist_config = persist_config
+        self._max_concurrent = max_concurrent
         self._sem = asyncio.Semaphore(max_concurrent)
 
     @property
@@ -106,24 +103,39 @@ class IngestPipeline:
         targets: list[str],
     ) -> IngestOutcome:
         """批量 ingest; 目录递归展开, 大小超过限制的文件跳过。"""
+        logger.info("ingest.batch.start targets=%s", targets)
+
         # 1. 展开路径
         files, warnings = _expand_files(targets)
         if not files:
+            logger.warning(
+                "ingest.batch.empty targets=%s warnings=%d", targets, len(warnings)
+            )
             return IngestOutcome(items=[], warnings=warnings, errors=[])
+
+        logger.info("ingest.batch.expanded file_count=%d", len(files))
 
         # 1.5 解析 dataset (并发前一次性创建, 消除 cfg.adopt race)
         cfg = self.persist_config
         resolved_dataset_id: uuid.UUID | None = None
         if self.persist_enabled and cfg is not None:
             if cfg.create_dataset:
+                logger.info("ingest.batch.dataset_create name=%s", cfg.dataset_name)
                 async with AsyncSessionLocal() as session:
                     resolved_dataset_id = await _create_dataset_once(
                         session, cfg.dataset_name
                     )
             elif cfg.dataset_id is not None:
                 resolved_dataset_id = cfg.dataset_id
+                logger.info("ingest.batch.dataset_use id=%s", resolved_dataset_id)
 
-        # 2. 并行 ingest
+        # 2. 并行 ingest; gather 会创建 N 个协程, 实际并发由 _sem 限制为 max_concurrent
+        logger.info(
+            "ingest.batch.processing file_count=%d max_concurrent=%d persist=%s",
+            len(files),
+            self._max_concurrent,
+            resolved_dataset_id is not None,
+        )
         results = await asyncio.gather(
             *[
                 self._process_gated(file, dataset_id=resolved_dataset_id)
@@ -146,21 +158,34 @@ class IngestPipeline:
             else:
                 items.append(outcome)
 
+        logger.info(
+            "ingest.batch.done ok=%d errors=%d warnings=%d",
+            len(items),
+            len(errors),
+            len(warnings),
+        )
         return IngestOutcome(items=items, warnings=warnings, errors=errors)
 
     async def _maybe_persist(
         self, result: IngestResult, *, dataset_id: uuid.UUID
     ) -> IngestResult:
-        cfg = self.persist_config
-        if cfg is None or not cfg.enabled:
-            return result
-
-        async with AsyncSessionLocal() as session:
-            pr = await persist_chunks(
-                session,
-                result,
-                dataset_id=dataset_id,
-            )
+        filename = result.doc_meta.filename or ""
+        logger.info(
+            "ingest.persist.start filename=%s chunks=%d dataset_id=%s",
+            filename,
+            len(result.chunks),
+            dataset_id,
+        )
+        pr = await persist_chunks(
+            result,
+            dataset_id=dataset_id,
+        )
+        logger.info(
+            "ingest.persist.done filename=%s old=%d new=%d",
+            filename,
+            pr.old_chunk_count,
+            pr.new_chunk_count,
+        )
         outcome = PersistOutcome(
             dataset_id=pr.dataset_id,
             dataset_name=pr.dataset_name,
@@ -184,11 +209,24 @@ class IngestPipeline:
         *,
         dataset_id: uuid.UUID | None = None,
     ) -> IngestResult:
+        logger.info("ingest.file.start path=%s", file)
+
         # 1. 读取文件
         text_doc = await self._read_file(file)
+        logger.info(
+            "ingest.file.read_done path=%s text_len=%d ext=%s",
+            file.name,
+            len(text_doc.text),
+            file.suffix,
+        )
 
         # 2. 标准化
         text_doc = await self.normalizer.normalize(text_doc)
+        logger.info(
+            "ingest.file.normalize_done path=%s text_len=%d",
+            file.name,
+            len(text_doc.text),
+        )
         text = text_doc.text
 
         # 3. 分块
@@ -197,6 +235,7 @@ class IngestPipeline:
             format_text=text_doc.format_text,
             get_format_text=True,
         )
+        logger.info("ingest.file.chunk_done path=%s chunks=%d", file.name, len(chunks))
 
         doc_meta: DocMeta = text_doc.meta
         title = extract_first_title(text_doc.text) or text_doc.meta.filename
@@ -209,7 +248,15 @@ class IngestPipeline:
         # 4. 存储
         if dataset_id is not None:
             updated_result = await self._maybe_persist(result, dataset_id=dataset_id)
+            logger.info(
+                "ingest.file.done path=%s chunks=%d persisted=True",
+                file.name,
+                len(chunks),
+            )
             return updated_result
+        logger.info(
+            "ingest.file.done path=%s chunks=%d persisted=False", file.name, len(chunks)
+        )
         return result
 
     async def _process_gated(

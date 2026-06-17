@@ -108,7 +108,7 @@ tests/                  # 见 tests/AGENTS.md
 ## Ingest 持久化与并发
 
 - Ingest 持久化: `IngestPipeline.ingest_many` 顶部一次性解析 `dataset_id` (`_create_dataset_once`), 然后并发 `_process(file, dataset_id=...)`, 每文件独立 `AsyncSessionLocal()` 写 document + chunks。
-- 并发上限: `IngestPipeline(max_concurrent=8)` 默认 8, 与 PG `pool_size=10` 留 2 余量。
+- 并发上限: `IngestPipeline(max_concurrent=10)` 默认 10; persist 短 session + `llm_sem` embedding 限流, embed 不占 PG 连接。
 - 错误语义: `IngestOutcome.errors` 结构化列出失败项; `CancelledError` 不被吞。
 
 ---
