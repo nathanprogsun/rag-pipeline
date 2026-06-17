@@ -78,6 +78,8 @@ def get_embed_model(model: str | None = None) -> OpenAIEmbeddings:
         openai_api_key=settings.openai_embedding_api_key,
         openai_api_base=settings.openai_embedding_base_url,
         dimensions=settings.openai_embedding_dim,
+        # OpenRouter Nemotron 等模型须 ``encoding_format=float``, 否则 SDK 解析失败
+        model_kwargs={"encoding_format": "float"},
         # DashScope compatible-mode 要求原始字符串输入，禁止 LangChain 预 tokenize
         check_embedding_ctx_length=False,
     )

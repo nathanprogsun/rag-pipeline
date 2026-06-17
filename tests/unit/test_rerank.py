@@ -3,9 +3,23 @@ import json
 import httpx
 import pytest
 
-from rag.infra.llm.rerank import QwenRerank
+from rag.infra.llm.rerank import QwenRerank, _rerank_endpoint
 
 _BASE_URL = "https://dashscope.aliyuncs.com/compatible-api/v1"
+
+
+def test_rerank_endpoint_dashscope() -> None:
+    assert (
+        _rerank_endpoint(_BASE_URL)
+        == "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+    )
+
+
+def test_rerank_endpoint_openrouter() -> None:
+    assert (
+        _rerank_endpoint("https://openrouter.ai/api/v1/rerank")
+        == "https://openrouter.ai/api/v1/rerank"
+    )
 
 
 @pytest.mark.asyncio

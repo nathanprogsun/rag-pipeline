@@ -66,7 +66,7 @@ jobs:
 
       - name: Lint (ruff)
         run: |
-          ruff check src tests
+          uv run ruff check src tests
 
       - name: Type check (mypy, gating)
         # Static type analysis. mypy>=1.11.0 is in dev deps (uv sync --extra dev).
@@ -81,18 +81,18 @@ jobs:
         # resolved in this commit (cli.py / ragas_real.py / query_ext.py /
         # audit.py / cite.py). PRs that introduce new mypy errors will fail CI.
         run: |
-          mypy src/rag --no-incremental
+          uv run mypy src/rag --no-incremental
 
       - name: Unit tests (no external deps)
         # Skip live_llm tests (require DashScope API key not available in CI)
         run: |
-          pytest tests/unit -v --tb=short -m "not live_llm" -q
+          uv run pytest tests/unit -v --tb=short -m "not live_llm" -q
 
       - name: Integration tests (real PG, fake LLM)
         # Integration tests use fake LLM (mock) + real PG via pgvector service.
         # Tests marked live_llm (require real DashScope embedding/llm API) are skipped.
         run: |
-          pytest tests/integration -v --tb=short -m "not live_llm" -q
+          uv run pytest tests/integration -v --tb=short -m "not live_llm" -q
 
       - name: Coverage report (enforces ≥80% gate)
         # Generate coverage from unit + integration runs.
@@ -101,7 +101,7 @@ jobs:
         # documented in tests/AGENTS.md / docs/dev.md.
         # Current baseline (2026-06): 92% — well above the 80% floor.
         run: |
-          pytest tests/unit tests/integration \
+          uv run pytest tests/unit tests/integration \
             --cov=rag \
             --cov-report=xml:coverage.xml \
             --cov-report=term-missing \

@@ -7,7 +7,15 @@ from pydantic import BaseModel, ValidationError
 
 from rag.config import settings
 
-_RERANK_PATH = "/reranks"
+_RERANK_PATH_DASHSCOPE = "/reranks"
+
+
+def _rerank_endpoint(base_url: str) -> str:
+    """DashScope: ``{base}/reranks``; OpenRouter: base 已含 ``/rerank`` 则不再拼接。"""
+    base = base_url.rstrip("/")
+    if base.endswith("/rerank"):
+        return base
+    return f"{base}{_RERANK_PATH_DASHSCOPE}"
 
 
 class Reranker(Protocol):
@@ -103,7 +111,7 @@ class QwenRerank:
         payload: dict[str, object],
     ) -> list[tuple[int, float]]:
         resp = await client.post(
-            f"{self._base_url}{_RERANK_PATH}",
+            _rerank_endpoint(self._base_url),
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
