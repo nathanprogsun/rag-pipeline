@@ -32,4 +32,4 @@
 - `documents` 是 `datasets` 与 `chunks` 之间的一级实体: 一个 `(dataset_id, filename)` 对应一个 active document (由 `documents_active_uniq` 部分唯一索引保证)。
 - `chunks.document_id` 为 NOT NULL FK; `(document_id, chunk_index)` 由 `chunks_document_chunk_idx_uniq` 部分唯一索引保证不重复。
 - 同一文件重 ingest 时, 通过 `documents.generation` 区分版本; 读取时取 `MAX(generation)` 决定可见性。
-- `datasets.name` UNIQUE: 重复 `--dataset-name` 第二次会失败而非静默重名。
+- `datasets.name` UNIQUE: CLI `--dataset-name` 走 get-or-create; 重跑同名 ingest 复用已有 `dataset_id`, document/chunk 按 filename upsert。

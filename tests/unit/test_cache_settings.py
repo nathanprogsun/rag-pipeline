@@ -2,6 +2,6 @@ from rag.config import CacheSettings
 
 
 class TestCacheSettings:
-    def test_default_query_extension_off(self) -> None:
+    def test_default_l1_ttl(self) -> None:
         settings = CacheSettings()
-        assert settings.query_ext_enabled is False
+        assert settings.l1_ttl == 86400

@@ -16,7 +16,7 @@ import typer
 from langchain_core.embeddings import Embeddings
 
 from rag.config import settings
-from rag.domain.search import SearchRequest
+from rag.domain.search import ContextConfig, RetrievalConfig, SearchRequest
 from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
@@ -60,6 +60,23 @@ def _err_exit(msg: str, code: int = 1) -> typer.Exit:
     raise typer.Exit(code=code)
 
 
+def _format_citation_scores(citation: object) -> str:
+    """格式化 citation 的 RRF / vector / fulltext / rerank 分数。"""
+    score = getattr(citation, "score", 0.0)
+    bd: dict[str, float] = getattr(citation, "score_breakdown", {}) or {}
+    rerank_score = getattr(citation, "rerank_score", None)
+    parts = [f"rrf={score:.3f}"]
+    if "vector" in bd:
+        parts.append(f"vec={bd['vector']:.3f}")
+    if "fulltext" in bd:
+        parts.append(f"ft={bd['fulltext']:.3f}")
+    if rerank_score is not None:
+        parts.append(f"rerank={rerank_score:.3f}")
+    elif "rerank" in bd:
+        parts.append(f"rerank={bd['rerank']:.3f}")
+    return " ".join(parts)
+
+
 def _emit_text(query: str, response: str, citations: list, hits: list) -> None:
     """以可读文本格式输出 response 和 citations。"""
     typer.echo(_SEPARATOR)
@@ -70,7 +87,7 @@ def _emit_text(query: str, response: str, citations: list, hits: list) -> None:
     typer.echo(f"Citations ({len(citations)}):")
     for i, c in enumerate(citations, start=1):
         typer.echo(
-            f"  [{i}] {c.source_name} (chunk_id={c.chunk_id}, score={c.score:.3f})"
+            f"  [{i}] {c.source_name} (chunk_id={c.chunk_id}, {_format_citation_scores(c)})"
         )
         preview = c.content[:80].replace("\n", " ")
         typer.echo(f"      {preview}{'...' if len(c.content) > 80 else ''}")
@@ -93,6 +110,8 @@ def _emit_json(
                 "source_name": c.source_name,
                 "content": c.content,
                 "score": c.score,
+                "score_breakdown": dict(c.score_breakdown),
+                "rerank_score": c.rerank_score,
                 "position": c.position,
                 "image_path": c.image_path,
             }
@@ -103,7 +122,10 @@ def _emit_json(
             {
                 "chunk_id": str(h.chunk_id),
                 "dataset_id": str(h.dataset_id),
+                "document_id": str(h.document_id) if h.document_id else None,
                 "score": h.score,
+                "score_breakdown": dict(h.score_breakdown),
+                "rerank_score": h.rerank_score,
                 "text_preview": h.text[:120],
             }
             for h in hits
@@ -156,6 +178,20 @@ def main(
         float,
         typer.Option("--rerank-weight", help="Rerank 权重 (0-1, 默认 0.7)。"),
     ] = 0.7,
+    score_threshold: Annotated[
+        float | None,
+        typer.Option(
+            "--score-threshold",
+            help="max(vector, fulltext) 分数下限; 不设则不过滤。",
+        ),
+    ] = 0.4,
+    query_ext: Annotated[
+        bool,
+        typer.Option(
+            "--query-ext/--no-query-ext",
+            help="是否启用 query 扩展 (默认开启)。",
+        ),
+    ] = True,
 ) -> None:
     """默认行为: 执行搜索; 若有子命令 (`list-datasets`) 则交由其处理。
 
@@ -171,6 +207,8 @@ def main(
         audit: 是否启用 audit 写入。
         audit_path: audit NDJSON 显式写入路径。
         rerank_weight: rerank 权重, 范围 0-1。
+        score_threshold: vector/fulltext 混合阈值, 为 None 时不过滤。
+        query_ext: 是否启用 query 扩展。
     """
     # 子命令接管: 跳过默认搜索行为
     if ctx.invoked_subcommand is not None:
@@ -210,7 +248,16 @@ def main(
     )
     pipeline = build_search_pipeline(deps)
     assert dataset_id is not None
-    req = SearchRequest(query=q, dataset_ids=list(dataset_id), audit=audit)
+    req = SearchRequest(
+        query=q,
+        dataset_ids=list(dataset_id),
+        audit=audit,
+        retrieval=RetrievalConfig(
+            top_k=top_k,
+            score_threshold=score_threshold,
+        ),
+        context=ContextConfig(query_extension=query_ext),
+    )
 
     try:
         result = asyncio.run(pipeline.ainvoke(req))

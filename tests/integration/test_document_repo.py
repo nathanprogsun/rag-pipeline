@@ -1,6 +1,7 @@
 """Integration tests for DocumentRepository."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -20,6 +21,28 @@ async def dataset_id(db_session: AsyncSession) -> uuid.UUID:
         embed_dim=1536,
     )
     return ds.id
+
+
+@pytest.mark.asyncio
+async def test_get_by_name_returns_active_dataset(
+    db_session: AsyncSession, dataset_id: uuid.UUID
+) -> None:
+    """``get_by_name`` 命中未软删 dataset; 软删后默认查不到。"""
+    ds_repo = DatasetRepository(db_session)
+    ds = await ds_repo.get_by_id(dataset_id)
+    assert ds is not None
+
+    found = await ds_repo.get_by_name(ds.name)
+    assert found is not None
+    assert found.id == dataset_id
+
+    ds.deleted_at = datetime.now(UTC)
+    await db_session.flush()
+
+    assert await ds_repo.get_by_name(ds.name) is None
+    found_deleted = await ds_repo.get_by_name(ds.name, include_deleted=True)
+    assert found_deleted is not None
+    assert found_deleted.id == dataset_id
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,8 @@ import pytest
 from pytest import fixture
 
 from ingest_helpers import run_ingest
+from rag.error_codes import IngestErrorCode
+from rag.exception import RAGError
 from rag.ingest import pipeline as pipeline_mod
 from rag.ingest.chunker import Chunker, ChunkSettings
 from rag.ingest.normalizer import NoOpNormalizer, StructureMode, StructureNormalizer
@@ -516,6 +518,55 @@ async def test_persist_fresh_ingest_soft_deletes_existing(
     assert pr.new_chunk_count == 5
 
 
+class _SlowEmbedder:
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        await asyncio.sleep(60.0)
+        return [[0.0] * 4 for _ in texts]
+
+
+@pytest.mark.asyncio
+async def test_persist_embed_timeout_marks_document_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """embedding 批次超时时标 failed 并抛 PERSIST_EMBED_FAILED, 不无限挂起。"""
+    import rag.ingest.persist as persist_mod
+
+    ds = _make_dataset()
+    dataset_repo = MagicMock()
+    dataset_repo.get_by_id = AsyncMock(return_value=ds)
+    doc_repo = _FakeDocumentRepo(status="pending")
+    chunk_repo = _FakeChunkRepo()
+    mark_failed = AsyncMock()
+    monkeypatch.setattr(persist_mod, "_mark_document_failed", mark_failed)
+    _patch_persist_repos(
+        monkeypatch,
+        dataset_repo=dataset_repo,
+        doc_repo=doc_repo,
+        chunk_repo=chunk_repo,
+    )
+
+    result_obj = IngestResult(
+        chunks=_make_chunks(2),
+        title="t",
+        doc_meta=DocMeta(filename="f.txt"),
+    )
+    with pytest.raises(RAGError) as exc_info:
+        await persist_chunks(
+            result_obj,
+            dataset_id=ds.id,
+            embedder=_SlowEmbedder(),  # type: ignore[arg-type]
+            embed_timeout_sec=0.05,
+        )
+
+    assert exc_info.value.code == IngestErrorCode.PERSIST_EMBED_FAILED
+    assert "超时" in exc_info.value.message
+    mark_failed.assert_awaited_once_with(
+        doc_repo.document_id,
+        persist_mod.PERSIST_EMBED_FAILED,
+    )
+    assert chunk_repo.bulk_inserts == []
+
+
 @pytest.mark.asyncio
 async def test_persist_accepts_embed_batch_size_param(
     monkeypatch: pytest.MonkeyPatch,
@@ -546,3 +597,61 @@ async def test_persist_accepts_embed_batch_size_param(
         embed_batch_size=8,
     )
     assert embedder.batches
+
+
+@pytest.mark.asyncio
+async def test_create_dataset_once_reuses_existing_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同名 ``--dataset-name`` 重跑应复用已有 dataset_id, 不再次 create。"""
+    import rag.ingest.persist as persist_mod
+
+    existing_id = uuid.uuid4()
+    existing = MagicMock()
+    existing.id = existing_id
+    existing.name = "2020年精选策略"
+
+    repo = MagicMock()
+    repo.get_by_name = AsyncMock(return_value=existing)
+    repo.create = AsyncMock()
+
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: repo)
+
+    got = await persist_mod._create_dataset_once(session, "2020年精选策略")
+
+    assert got == existing_id
+    repo.create.assert_not_called()
+    session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_dataset_once_creates_when_name_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次 ingest 按名称创建 dataset。"""
+    import rag.ingest.persist as persist_mod
+
+    new_id = uuid.uuid4()
+    ds = MagicMock()
+    ds.id = new_id
+    ds.name = "new-ds"
+
+    repo = MagicMock()
+    repo.get_by_name = AsyncMock(return_value=None)
+    repo.create = AsyncMock(return_value=ds)
+
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: repo)
+
+    got = await persist_mod._create_dataset_once(session, "new-ds")
+
+    assert got == new_id
+    repo.create.assert_awaited_once()
+    session.commit.assert_awaited_once()

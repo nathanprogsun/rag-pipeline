@@ -73,6 +73,8 @@ class SimpleCite:
                 content=d.text,
                 image_path=d.image_path,
                 score=d.score,
+                score_breakdown=dict(d.score_breakdown),
+                rerank_score=d.rerank_score,
             )
             for i, d in enumerate(docs, start=1)
         ]
