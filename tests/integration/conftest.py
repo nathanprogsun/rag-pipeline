@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable
 from sqlalchemy import text
@@ -36,6 +37,23 @@ from rag.ingest.pipeline import IngestPipeline
 # ─────────────────────────────────────────────────────────────────────────────
 # DB 集成
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True, loop_scope="session")
+async def reset_schema() -> AsyncGenerator[None]:
+    """会话级 schema 重置：drop_all + create_all。
+
+    仅作用于测试 DB；生产环境使用 ``scripts/backfill_documents.sql`` 演进 schema。
+    ``Base.metadata.create_all`` 是幂等的但不会为已有数据的表添加新 NOT NULL 列
+    (如 ``chunks.document_id``),因此测试前必须 drop_all 重建。
+    """
+    engine = create_async_engine(str(settings.database_url))
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+    yield
 
 
 @pytest.fixture

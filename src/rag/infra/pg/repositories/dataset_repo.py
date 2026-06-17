@@ -13,8 +13,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
+from rag.infra.pg.models.document import DocumentModel
 
 
 class DatasetListItem(BaseModel):
@@ -24,6 +24,10 @@ class DatasetListItem(BaseModel):
     name: str
     embed_model: str
     chunk_count: int
+    """该 dataset 下所有未软删文档的 ``total_chunks`` 之和。
+
+    P2 之后由 ``documents.total_chunks`` 维护；不含软删文档对应的 chunks。
+    """
     created_at: datetime
 
 
@@ -125,14 +129,20 @@ class DatasetRepository:
 
         Returns:
             `DatasetListItem` 列表, 每项含 `chunk_count` (子查询聚合)。
+
+        Note:
+            `chunk_count` 由 ``documents.total_chunks`` 维护 (P2+),
+            仅统计未软删文档的 chunks 之和; 与旧实现 (直接 `COUNT(chunks.id)`,
+            含软删块) 在数值上可能不同。
         """
-        # 子查询: 每个 dataset 的 chunk 数量 (含软删除块, 与 dataset 删除状态解耦)
+        # 子查询: 每个 dataset 的 chunk_count = SUM(documents.total_chunks) of active docs
         chunk_count_sq = (
             select(
-                ChunkModel.dataset_id.label("dataset_id"),
-                func.count(ChunkModel.id).label("n"),
+                DocumentModel.dataset_id.label("dataset_id"),
+                func.coalesce(func.sum(DocumentModel.total_chunks), 0).label("n"),
             )
-            .group_by(ChunkModel.dataset_id)
+            .where(DocumentModel.deleted_at.is_(None))
+            .group_by(DocumentModel.dataset_id)
             .subquery()
         )
         stmt = (
