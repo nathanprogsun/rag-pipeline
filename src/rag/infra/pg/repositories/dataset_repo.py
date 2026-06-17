@@ -57,6 +57,8 @@ class DatasetRepository:
         stmt = select(DatasetModel).where(DatasetModel.id == dataset_id)
         if not include_deleted:
             stmt = stmt.where(DatasetModel.deleted_at.is_(None))
+        else:
+            stmt = stmt.execution_options(include_deleted=True)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -75,6 +77,8 @@ class DatasetRepository:
         stmt = select(DatasetModel).where(DatasetModel.name == name)
         if not include_deleted:
             stmt = stmt.where(DatasetModel.deleted_at.is_(None))
+        else:
+            stmt = stmt.execution_options(include_deleted=True)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
