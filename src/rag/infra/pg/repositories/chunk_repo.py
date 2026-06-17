@@ -136,6 +136,19 @@ class ChunkRepository:
         self.session.add_all(domain_chunk_to_model(c) for c in chunks)
         await self.session.flush()
 
+    async def get_existing_indexes(self, document_id: uuid.UUID) -> set[int]:
+        """取该 document 下所有 active chunk 的 ``chunk_index`` 集合。
+
+        用于 ingest 阶段断点续传: 调用方比对 in-memory chunk 列表与
+        已落库 chunk_index, 跳过已写入的批次, 避免重复 embedding。
+        """
+        stmt = select(ChunkModel.chunk_index).where(
+            ChunkModel.document_id == document_id,
+            ChunkModel.deleted_at.is_(None),
+        )
+        result = await self.session.execute(stmt)
+        return {row[0] for row in result.all()}
+
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
         """仓储级事务上下文：正常结束提交，异常回滚后重新抛。

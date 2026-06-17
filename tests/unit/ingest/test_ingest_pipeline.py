@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from asyncio import CancelledError
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pytest import fixture
@@ -13,7 +13,10 @@ from ingest_helpers import run_ingest
 from rag.ingest import pipeline as pipeline_mod
 from rag.ingest.chunker import Chunker, ChunkSettings
 from rag.ingest.normalizer import NoOpNormalizer, StructureMode, StructureNormalizer
+from rag.ingest.persist import persist as persist_chunks
 from rag.ingest.pipeline import IngestPipeline
+from rag.ingest.types import Chunk as IngestChunk
+from rag.ingest.types import ChunkMetadata as IngestChunkMetadata
 from rag.ingest.types import DocMeta, IngestResult, PersistConfig
 
 
@@ -282,3 +285,255 @@ async def test_max_concurrent_bounded(
     pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()), max_concurrent=4)
     await pipeline.ingest_many([str(f) for f in files])
     assert max_seen <= 4
+
+
+# ----------------------------------------------------------------------
+# persist() batched commits + resume behavior
+# ----------------------------------------------------------------------
+
+
+def _make_chunks(n: int) -> list[IngestChunk]:
+    return [
+        IngestChunk(
+            id=uuid.uuid4(),
+            text=f"chunk-{i}",
+            metadata=IngestChunkMetadata(chunk_index=i, heading_stack=[]),
+        )
+        for i in range(n)
+    ]
+
+
+def _make_dataset() -> MagicMock:
+    ds = MagicMock()
+    ds.id = uuid.uuid4()
+    ds.name = "ds-test"
+    return ds
+
+
+class _FakeEmbedder:
+    """记录每批调用的 text 列表与对应 batch_size。"""
+
+    def __init__(self, dim: int = 4) -> None:
+        self.dim = dim
+        self.batches: list[list[str]] = []
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.batches.append(list(texts))
+        return [[0.0] * self.dim for _ in texts]
+
+
+class _FakeDocumentRepo:
+    def __init__(self, *, status: str = "pending") -> None:
+        self.status = status
+        self.marked: list[tuple[str, str | None]] = []
+        self.document_id = uuid.uuid4()
+        self.upsert_calls = 0
+
+    async def upsert(self, **_kwargs: object) -> MagicMock:
+        self.upsert_calls += 1
+        doc = MagicMock()
+        doc.id = self.document_id
+        doc.status = "running"
+        return doc
+
+    async def mark_status(
+        self, document_id: uuid.UUID, status: str, *, error_code: str | None = None
+    ) -> None:
+        self.status = status
+        self.marked.append((status, error_code))
+
+    async def get_active(self, dataset_id: uuid.UUID, filename: str) -> MagicMock | None:
+        if self.status == "running":
+            doc = MagicMock()
+            doc.id = self.document_id
+            doc.status = "running"
+            return doc
+        return None
+
+
+class _FakeChunkRepo:
+    def __init__(self, existing_indexes: set[int] | None = None) -> None:
+        self.existing = set(existing_indexes or ())
+        self.bulk_inserts: list[list[object]] = []
+        self.soft_delete_calls: list[uuid.UUID] = []
+
+    async def get_existing_indexes(self, document_id: uuid.UUID) -> set[int]:
+        return set(self.existing)
+
+    async def soft_delete_by_document(self, document_id: uuid.UUID) -> int:
+        self.soft_delete_calls.append(document_id)
+        n = len(self.existing)
+        self.existing.clear()
+        return n
+
+    async def bulk_insert(self, chunks: list[object]) -> None:
+        self.bulk_inserts.append(list(chunks))
+
+
+@pytest.mark.asyncio
+async def test_persist_splits_embedding_into_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """embed_batch_size=4, 6 chunks -> embedder 调用 2 次 (4+2)。"""
+    session = MagicMock()
+    session.commit = AsyncMock()
+
+    ds = _make_dataset()
+    dataset_repo = MagicMock()
+    dataset_repo.get_by_id = AsyncMock(return_value=ds)
+    doc_repo = _FakeDocumentRepo(status="pending")
+    chunk_repo = _FakeChunkRepo()
+    embedder = _FakeEmbedder()
+
+    import rag.ingest.persist as persist_mod
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: dataset_repo)
+    monkeypatch.setattr(persist_mod, "DocumentRepository", lambda _s: doc_repo)
+    monkeypatch.setattr(persist_mod, "ChunkRepository", lambda _s: chunk_repo)
+
+    result_obj = IngestResult(
+        chunks=_make_chunks(6),
+        title="t",
+        doc_meta=DocMeta(filename="f.txt"),
+    )
+    pr = await persist_chunks(
+        session,
+        result_obj,
+        dataset_id=ds.id,
+        embedder=embedder,  # type: ignore[arg-type]
+        embed_batch_size=4,
+    )
+
+    assert len(embedder.batches) == 2
+    assert [len(b) for b in embedder.batches] == [4, 2]
+    # 每 batch 一提交 + 最后 mark completed 提交 -> 至少 3 次 commit
+    assert session.commit.await_count >= 3
+    # 两批共 6 个 chunk 全部落库
+    assert sum(len(b) for b in chunk_repo.bulk_inserts) == 6
+    assert pr.new_chunk_count == 6
+    assert pr.old_chunk_count == 0
+
+
+@pytest.mark.asyncio
+async def test_persist_resume_skips_existing_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status='running' + 已存在 chunk_index=0,1,2 -> 只 embed 3,4,5 (剩余 3 个)。"""
+    session = MagicMock()
+    session.commit = AsyncMock()
+
+    ds = _make_dataset()
+    dataset_repo = MagicMock()
+    dataset_repo.get_by_id = AsyncMock(return_value=ds)
+    doc_repo = _FakeDocumentRepo(status="running")
+    chunk_repo = _FakeChunkRepo(existing_indexes={0, 1, 2})
+    embedder = _FakeEmbedder()
+
+    import rag.ingest.persist as persist_mod
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: dataset_repo)
+    monkeypatch.setattr(persist_mod, "DocumentRepository", lambda _s: doc_repo)
+    monkeypatch.setattr(persist_mod, "ChunkRepository", lambda _s: chunk_repo)
+
+    result_obj = IngestResult(
+        chunks=_make_chunks(6),
+        title="t",
+        doc_meta=DocMeta(filename="f.txt"),
+    )
+    pr = await persist_chunks(
+        session,
+        result_obj,
+        dataset_id=ds.id,
+        embedder=embedder,  # type: ignore[arg-type]
+        embed_batch_size=10,
+    )
+
+    # resume: 不软删旧 chunk, 跳过已存在 index
+    assert chunk_repo.soft_delete_calls == []
+    # 只 embed 剩余 3 个 chunk
+    assert sum(len(b) for b in embedder.batches) == 3
+    # 只 insert 3 个新 chunk
+    assert sum(len(b) for b in chunk_repo.bulk_inserts) == 3
+    assert pr.old_chunk_count == 3
+    assert pr.new_chunk_count == 3  # 本次 persist 调用新写入的 chunk 数
+    # 终态: completed
+    assert doc_repo.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_persist_fresh_ingest_soft_deletes_existing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status='completed' (非 running) -> 软删旧 chunk, 全量重写。"""
+    session = MagicMock()
+    session.commit = AsyncMock()
+
+    ds = _make_dataset()
+    dataset_repo = MagicMock()
+    dataset_repo.get_by_id = AsyncMock(return_value=ds)
+    doc_repo = _FakeDocumentRepo(status="completed")
+    chunk_repo = _FakeChunkRepo(existing_indexes={0, 1, 2, 3, 4})
+    embedder = _FakeEmbedder()
+
+    import rag.ingest.persist as persist_mod
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: dataset_repo)
+    monkeypatch.setattr(persist_mod, "DocumentRepository", lambda _s: doc_repo)
+    monkeypatch.setattr(persist_mod, "ChunkRepository", lambda _s: chunk_repo)
+
+    result_obj = IngestResult(
+        chunks=_make_chunks(5),
+        title="t",
+        doc_meta=DocMeta(filename="f.txt"),
+    )
+    pr = await persist_chunks(
+        session,
+        result_obj,
+        dataset_id=ds.id,
+        embedder=embedder,  # type: ignore[arg-type]
+        embed_batch_size=10,
+    )
+
+    # fresh: 软删旧 chunk (5 个)
+    assert chunk_repo.soft_delete_calls == [doc_repo.document_id]
+    # 全量重写 5 个
+    assert sum(len(b) for b in embedder.batches) == 5
+    assert sum(len(b) for b in chunk_repo.bulk_inserts) == 5
+    assert pr.old_chunk_count == 5
+    assert pr.new_chunk_count == 5
+
+
+@pytest.mark.asyncio
+async def test_persist_accepts_embed_batch_size_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """最小冒烟: persist 接受 embed_batch_size kwarg, 不报 TypeError。"""
+    session = MagicMock()
+    session.commit = AsyncMock()
+
+    ds = _make_dataset()
+    dataset_repo = MagicMock()
+    dataset_repo.get_by_id = AsyncMock(return_value=ds)
+    doc_repo = _FakeDocumentRepo(status="pending")
+    chunk_repo = _FakeChunkRepo()
+    embedder = _FakeEmbedder()
+
+    import rag.ingest.persist as persist_mod
+
+    monkeypatch.setattr(persist_mod, "DatasetRepository", lambda _s: dataset_repo)
+    monkeypatch.setattr(persist_mod, "DocumentRepository", lambda _s: doc_repo)
+    monkeypatch.setattr(persist_mod, "ChunkRepository", lambda _s: chunk_repo)
+
+    result_obj = IngestResult(
+        chunks=_make_chunks(2),
+        title="t",
+        doc_meta=DocMeta(filename="f.txt"),
+    )
+    await persist_chunks(
+        session,
+        result_obj,
+        dataset_id=ds.id,
+        embedder=embedder,  # type: ignore[arg-type]
+        embed_batch_size=8,
+    )
+    assert embedder.batches  # 至少调了一次

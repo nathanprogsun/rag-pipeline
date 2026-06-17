@@ -1,10 +1,15 @@
 """PersistStage: 把 `IngestResult` 写到 PG。
 
-串联: 解析 dataset (id 或新建) -> 批量 embedding -> 按 document_id 软删旧 chunk
--> 批量 insert 新 chunk。整段在单 PG 事务内执行, 任何异常触发 rollback。
+串联: 解析 dataset (id 或新建) -> 批量 embedding (按窗口拆分) ->
+按 document_id 软删旧 chunk -> 分批 commit 新 chunk。
 
-幂等策略: 同 document_id 先软删再 insert。重复 ingest 同一文件得到更新后的
-chunk 集合, 不会产生重复。
+断点续传语义: 同一 (dataset_id, filename) 再次进入 persist 时,
+- 若 `documents.status == "running"` (上次中断), 跳过已存在的 chunk_index,
+  仅补缺失的 chunk; 标记 status="completed" 在所有 batch 成功后。
+- 若 `documents.status == "pending"` / `"completed"` (全新 / 主动重 ingest),
+  软删旧 generation 的 chunk, 全量重写。
+
+每 batch 一提交: 避免大 ingest 中途崩溃时丢失已完成的 embedding 工作。
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from rag.ingest.types import IngestResult
 logger = logging.getLogger(__name__)
 
 PERSIST_INSERT_FAILED: str = "PERSIST_INSERT_FAILED"
+PERSIST_EMBED_FAILED: str = "PERSIST_EMBED_FAILED"
 
 
 def _hash_chunks(chunks: list[IngestChunk]) -> bytes:
@@ -100,12 +106,34 @@ class PersistResult:
         )
 
 
+async def _mark_document_failed(
+    document_id: uuid.UUID, error_code: str
+) -> None:
+    """在独立 session 中把 document 标为 failed。
+
+    落库失败时主事务会回滚, 因此用独立 session 持久化 failed 状态。
+    自身抛错时仅记录, 不向上冒泡 — 调用方已经把真实异常抛出。
+    """
+    try:
+        async with AsyncSessionLocal() as fail_session:
+            fail_repo = DocumentRepository(fail_session)
+            await fail_repo.mark_status(document_id, "failed", error_code=error_code)
+            await fail_session.commit()
+    except Exception as inner_exc:  # noqa: BLE001
+        logger.warning(
+            "failed to persist document_id=%s failed status: %s",
+            document_id,
+            inner_exc,
+        )
+
+
 async def persist(
     session: AsyncSession,
     result: IngestResult,
     *,
     dataset_id: uuid.UUID,
     embedder: Embeddings | None = None,
+    embed_batch_size: int = 256,
 ) -> PersistResult:
     """把 `IngestResult.chunks` 写入 PG。``dataset_id`` 必传。
 
@@ -114,13 +142,21 @@ async def persist(
         result: `IngestPipeline._process()` 输出。
         dataset_id: 落库目标 dataset 的 UUID (由 pipeline 顶部解析)。
         embedder: 可选 LangChain `Embeddings`; 缺省时按 `settings.openai_embedding_*` 自动构造。
+        embed_batch_size: 每次 `aembed_documents` 调用的 chunk 数。
+            每个 batch 落库后立即 commit, 避免大批量 ingest 中途崩溃丢失已完成工作。
 
     Returns:
         `PersistResult`, 含 dataset_id 与新旧 chunk 数。
 
     Raises:
-        RAGError: dataset_id 不存在。
+        RAGError: dataset_id 不存在; embedding 失败; 插入失败。
     """
+    if embed_batch_size <= 0:
+        raise RAGError(
+            code=IngestErrorCode.PERSIST_INVALID_ARGS,
+            message=f"embed_batch_size 必须 > 0, 实际 {embed_batch_size}",
+        )
+
     dataset_repo = DatasetRepository(session)
     ds = await dataset_repo.get_by_id(dataset_id)
     if ds is None:
@@ -129,97 +165,139 @@ async def persist(
             message=f"dataset_id {dataset_id} 不存在或已软删除",
         )
 
-    # 2. 批量 embedding
-    if embedder is None:
-        embedder = get_embed_model()
+    filename = result.doc_meta.filename
     chunks = result.chunks
+    chunk_repo = ChunkRepository(session)
+    doc_repo = DocumentRepository(session)
+
+    # 1. 空 chunks 短路: 仍然 upsert document (status=running -> completed), 但不写 chunk。
     if not chunks:
+        if filename:
+            document = await doc_repo.upsert(
+                dataset_id=ds.id,
+                filename=filename,
+                content_hash=_hash_chunks([]),
+                modality="text",
+                total_chunks=0,
+            )
+            await doc_repo.mark_status(document.id, "completed")
+            await session.commit()
         logger.info("persist.no_chunks dataset_id=%s", ds.id)
         return PersistResult(
             dataset_id=ds.id, dataset_name=ds.name, old_chunk_count=0, new_chunk_count=0
         )
 
-    # 入库用 chunk.text (默认 format_text 视图, 已在前序选好)
-    texts = [c.text for c in chunks]
-    try:
-        embeddings: list[list[float]] = await embedder.aembed_documents(texts)
-    except Exception as e:
-        raise RAGError(
-            code=IngestErrorCode.PERSIST_EMBED_FAILED,
-            message=f"embedding 失败: {e!r}",
-        ) from e
-
-    # 3. 构造 domain.document.Chunk (file ingest 落库语义固定为 file)
-    filename = result.doc_meta.filename
-    chunk_repo = ChunkRepository(session)
-    document_repo = DocumentRepository(session)
-
-    # 3a. upsert documents 行, 拿到 document_id
-    document_id: uuid.UUID | None = None
+    # 2. resume 检测: 在 upsert 之前先看现有 document 的 status。
+    #    upsert 会无条件 status="running", 必须在它之前判断。
+    existing_doc: object | None = None
     if filename:
-        doc = await document_repo.upsert(
+        existing_doc = await doc_repo.get_active(ds.id, filename)
+    is_resume = existing_doc is not None and getattr(existing_doc, "status", None) == "running"
+
+    # 3. upsert document (status -> "running", generation += 1)
+    document_id: uuid.UUID
+    if filename:
+        document = await doc_repo.upsert(
             dataset_id=ds.id,
             filename=filename,
             content_hash=_hash_chunks(chunks),
             modality="text",
             total_chunks=len(chunks),
         )
-        document_id = doc.id
+        document_id = document.id
+    else:
+        # 无 filename 的数据源 (e.g. URL fetch) 退化为 UUID 占位 document,
+        # 续传语义不适用。
+        document_id = uuid.uuid4()
+        is_resume = False
 
-    domain_chunks: list[DomainChunk] = [
-        _build_domain_chunk(
-            c,
-            dataset_id=ds.id,
-            document_id=document_id or uuid.uuid4(),
-            embedding=emb,
-            filename=filename,
+    # 4. 准备 remaining_chunks: 续传跳过已存在, 否则按需软删旧 generation 的 chunks。
+    existing_indexes: set[int] = set()
+    if is_resume:
+        existing_indexes = await chunk_repo.get_existing_indexes(document_id)
+        remaining_chunks = [
+            (i, c) for i, c in enumerate(chunks) if i not in existing_indexes
+        ]
+        logger.info(
+            "persist.resume document_id=%s skipped=%d remaining=%d",
+            document_id,
+            len(existing_indexes),
+            len(remaining_chunks),
         )
-        for c, emb in zip(chunks, embeddings, strict=True)
-    ]
+    else:
+        existing_indexes = await chunk_repo.get_existing_indexes(document_id)
+        if existing_indexes:
+            await chunk_repo.soft_delete_by_document(document_id)
+            await session.commit()
+        remaining_chunks = list(enumerate(chunks))
 
-    # 4. 按 document_id 软删旧 chunk
-    old_count = 0
-    if document_id is not None:
-        old_count = await chunk_repo.soft_delete_by_document(document_id)
+    # 5. embedding + insert 按 batch 循环, 每 batch 一提交。
+    if embedder is None:
+        embedder = get_embed_model()
 
-    # 5. 批量 insert 新 chunk; 失败时把 document 标为 failed (独立 session 持久化)
-    # 主事务即将回滚 — 用独立 session 持久化 failed 状态。
-    try:
-        await chunk_repo.bulk_insert(domain_chunks)
-    except Exception as exc:
-        if document_id is not None:
-            try:
-                async with AsyncSessionLocal() as fail_session:
-                    fail_repo = DocumentRepository(fail_session)
-                    await fail_repo.mark_status(
-                        document_id, "failed", error_code=PERSIST_INSERT_FAILED
-                    )
-                    await fail_session.commit()
-            except Exception as inner_exc:
-                logger.warning(
-                    "failed to persist document_id=%s failed status: %s",
-                    document_id,
-                    inner_exc,
-                )
-        raise
+    new_chunk_count = 0
+    for batch_start in range(0, len(remaining_chunks), embed_batch_size):
+        batch = remaining_chunks[batch_start : batch_start + embed_batch_size]
+        batch_texts = [c.text for _, c in batch]
 
-    # 6. 标记 document 为 completed (必须在 commit 前, 同一事务持久化)
-    if document_id is not None:
-        await document_repo.mark_status(document_id, "completed")
+        # 5a. 尝试 embedding; 失败时把 document 标 failed (独立 session)。
+        try:
+            embeddings: list[list[float]] = await embedder.aembed_documents(batch_texts)
+        except Exception as e:
+            await _mark_document_failed(document_id, PERSIST_EMBED_FAILED)
+            raise RAGError(
+                code=IngestErrorCode.PERSIST_EMBED_FAILED,
+                message=(
+                    f"embedding 失败 (batch {batch_start}"
+                    f"-{batch_start + len(batch)}): {e!r}"
+                ),
+            ) from e
 
-    await session.commit()
+        # 5b. 构造 domain chunk 并落库; 失败同理标 failed。
+        domain_batch: list[DomainChunk] = [
+            _build_domain_chunk(
+                c,
+                dataset_id=ds.id,
+                document_id=document_id,
+                embedding=emb,
+                filename=filename,
+            )
+            for (_, c), emb in zip(batch, embeddings, strict=True)
+        ]
+        try:
+            await chunk_repo.bulk_insert(domain_batch)
+        except Exception:
+            await _mark_document_failed(document_id, PERSIST_INSERT_FAILED)
+            raise
+
+        # 5c. 每 batch 独立 commit, 中途崩溃时已完成 batch 已落库。
+        await session.commit()
+        new_chunk_count += len(batch)
+        logger.info(
+            "persist.batch_committed document_id=%s batch=%d-%d",
+            document_id,
+            batch_start,
+            batch_start + len(batch),
+        )
+
+    # 6. 全部 batch 完成后, document 标 completed (同一事务持久化)。
+    if filename:
+        await doc_repo.mark_status(document_id, "completed")
+        await session.commit()
+
     logger.info(
-        "persist.committed dataset_id=%s filename=%s old=%d new=%d",
+        "persist.committed dataset_id=%s filename=%s old=%d new=%d resume=%s",
         ds.id,
         filename,
-        old_count,
-        len(domain_chunks),
+        len(existing_indexes),
+        new_chunk_count,
+        is_resume,
     )
     return PersistResult(
         dataset_id=ds.id,
         dataset_name=ds.name,
-        old_chunk_count=old_count,
-        new_chunk_count=len(domain_chunks),
+        old_chunk_count=len(existing_indexes),
+        new_chunk_count=new_chunk_count,
     )
 
 
