@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from rag.ingest.reader.html2md import (
     MAX_HTML_TRANSFORM_CHARS,
     html_to_md,

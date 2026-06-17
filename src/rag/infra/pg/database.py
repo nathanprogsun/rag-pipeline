@@ -56,10 +56,7 @@ async def truncate_all() -> None:
         # chunks 有 FK 指向 documents/datasets, ON DELETE CASCADE 允许一次 TRUNCATE CASCADE
         # 显式三张表 + CASCADE 兼顾可读性
         await conn.execute(
-            text(
-                "TRUNCATE TABLE chunks, documents, datasets "
-                "RESTART IDENTITY CASCADE"
-            )
+            text("TRUNCATE TABLE chunks, documents, datasets RESTART IDENTITY CASCADE")
         )
 
 

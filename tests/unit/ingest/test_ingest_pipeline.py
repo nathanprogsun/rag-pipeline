@@ -276,9 +276,7 @@ async def test_max_concurrent_bounded(
         max_seen = max(max_seen, in_flight)
         await asyncio.sleep(0.01)
         in_flight -= 1
-        return IngestResult(
-            chunks=[], title=None, doc_meta=DocMeta(filename=str(file))
-        )
+        return IngestResult(chunks=[], title=None, doc_meta=DocMeta(filename=str(file)))
 
     monkeypatch.setattr(IngestPipeline, "_process", fake_process)
     pipeline = IngestPipeline(chunker=Chunker(ChunkSettings()), max_concurrent=4)

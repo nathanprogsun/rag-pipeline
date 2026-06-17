@@ -6,7 +6,6 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.repositories.dataset_repo import DatasetRepository
 from rag.infra.pg.repositories.document_repo import DocumentRepository
 
@@ -65,9 +64,7 @@ async def test_mark_status_updates(
 
 
 @pytest.mark.asyncio
-async def test_list_by_dataset(
-    db_session: AsyncSession, dataset_id: uuid.UUID
-) -> None:
+async def test_list_by_dataset(db_session: AsyncSession, dataset_id: uuid.UUID) -> None:
     repo = DocumentRepository(db_session)
     await repo.upsert(dataset_id=dataset_id, filename="d1.txt")
     await repo.upsert(dataset_id=dataset_id, filename="d2.txt")

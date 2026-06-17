@@ -113,9 +113,7 @@ class ChunkRepository:
             .values(deleted_at=func.now())
         )
 
-    async def soft_delete_by_document(
-        self, document_id: uuid.UUID
-    ) -> int:
+    async def soft_delete_by_document(self, document_id: uuid.UUID) -> int:
         """按 document_id 软删, 返回受影响行数。"""
         result = await self.session.execute(
             update(ChunkModel)

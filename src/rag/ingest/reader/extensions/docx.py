@@ -42,6 +42,7 @@ async def docx_adapter(
     Raises:
         RAGError: ``code=READER_PARSE`` —— mammoth 解析失败。
     """
+
     def _run_mammoth() -> object:
         """在 worker 线程内同步执行 mammoth, 避免阻塞 event loop。"""
         try:

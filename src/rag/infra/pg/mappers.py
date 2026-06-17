@@ -26,7 +26,9 @@ from typing import Literal, cast
 from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.infra.pg.models.chunk import ChunkModel
-from rag.infra.pg.models.document import DocumentModel  # noqa: F401  # 注册到 Base.metadata
+from rag.infra.pg.models.document import (
+    DocumentModel,  # noqa: F401  # 注册到 Base.metadata
+)
 
 
 def chunk_model_to_domain(model: ChunkModel) -> DomainChunk:

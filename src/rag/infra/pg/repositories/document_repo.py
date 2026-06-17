@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +57,7 @@ class DocumentRepository:
             existing.total_chunks = total_chunks
             existing.status = "running"
             existing.error_code = None
-            existing.last_processed_at = datetime.now(timezone.utc)
+            existing.last_processed_at = datetime.now(UTC)
             await self.session.flush()
             return existing
         model = DocumentModel(

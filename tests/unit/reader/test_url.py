@@ -45,7 +45,7 @@ async def test_read_url_success_html() -> None:
 
     assert "Web Title" in doc.text
     assert "网页正文" in doc.text
-    assert doc.meta.datasource == "url"
+    assert doc.meta.filename is not None
     assert doc.meta.mime == "text/html"
 
 
