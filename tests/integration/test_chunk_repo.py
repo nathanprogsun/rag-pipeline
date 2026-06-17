@@ -10,6 +10,7 @@ from rag.domain.document import Chunk as DomainChunk
 from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
+from rag.infra.pg.models.document import DocumentModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 
 EMBED_DIM = 1536
@@ -30,6 +31,29 @@ async def _create_dataset(
     return ds.id
 
 
+async def _create_document(
+    db_session: AsyncSession,
+    dataset_id: uuid.UUID,
+    *,
+    filename: str = "test-doc.txt",
+    total_chunks: int = 1,
+) -> uuid.UUID:
+    """创建 document 行并 flush, 返回新 document.id。
+
+    测试用的 ``chunks`` 行的 ``document_id`` 必须指向一个已存在的
+    ``documents`` 行, 否则违反 ``chunks_document_id_fkey``。
+    """
+    doc = DocumentModel(
+        dataset_id=dataset_id,
+        filename=filename,
+        status="completed",
+        total_chunks=total_chunks,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    return doc.id
+
+
 async def _set_tsvector(
     db_session: AsyncSession, chunk_id: uuid.UUID, content: str
 ) -> None:
@@ -45,10 +69,11 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
+        document_id = await _create_document(db_session, dataset_id, filename="v.txt")
         db_session.add(
             ChunkModel(
                 dataset_id=dataset_id,
-                document_id=uuid.uuid4(),
+                document_id=document_id,
                 text="vector hit",
                 embedding=_embedding(1.0),
             )
@@ -68,16 +93,21 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
+        document_id = await _create_document(
+            db_session, dataset_id, filename="ft.txt", total_chunks=2
+        )
         match = ChunkModel(
             dataset_id=dataset_id,
-            document_id=uuid.uuid4(),
+            document_id=document_id,
             text="postgresql vector fulltext",
+            chunk_index=0,
             embedding=_embedding(),
         )
         miss = ChunkModel(
             dataset_id=dataset_id,
-            document_id=uuid.uuid4(),
+            document_id=document_id,
             text="unrelated content only",
+            chunk_index=1,
             embedding=_embedding(0.5),
         )
         db_session.add_all([match, miss])
@@ -96,7 +126,9 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
-        document_id = uuid.uuid4()
+        document_id = await _create_document(
+            db_session, dataset_id, filename="bulk.txt", total_chunks=3
+        )
         chunks = [
             DomainChunk(
                 id=uuid.uuid4(),
@@ -123,12 +155,15 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
+        document_id = await _create_document(
+            db_session, dataset_id, filename="sib.txt", total_chunks=4
+        )
         parent = "Chapter 1"
         for i in range(4):
             db_session.add(
                 ChunkModel(
                     dataset_id=dataset_id,
-                    document_id=uuid.uuid4(),
+                    document_id=document_id,
                     text=f"sibling-{i}",
                     parent_title=parent,
                     chunk_index=i,
@@ -146,10 +181,13 @@ class TestChunkRepository:
         self, db_session: AsyncSession, chunk_repo: ChunkRepository
     ) -> None:
         dataset_id = await _create_dataset(db_session)
+        document_id = await _create_document(
+            db_session, dataset_id, filename="report.pdf", total_chunks=1
+        )
         db_session.add(
             ChunkModel(
                 dataset_id=dataset_id,
-                document_id=uuid.uuid4(),
+                document_id=document_id,
                 text="soft delete me",
                 filename="report.pdf",
                 embedding=_embedding(),

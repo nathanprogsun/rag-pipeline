@@ -22,6 +22,7 @@ from rag.domain.document import ChunkMetadata as DomainChunkMetadata
 from rag.error_codes import IngestErrorCode
 from rag.exception import RAGError
 from rag.infra.llm.embed import get_embed_model
+from rag.infra.pg.database import AsyncSessionLocal
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
 from rag.infra.pg.repositories.dataset_repo import DatasetRepository
 from rag.infra.pg.repositories.document_repo import DocumentRepository
@@ -181,18 +182,25 @@ async def persist(
     if document_id is not None:
         old_count = await chunk_repo.soft_delete_by_document(document_id)
 
-    # 5. 批量 insert 新 chunk; 失败时把 document 标为 failed
-    # 注意: 此处的 mark_status("failed") 与 bulk_insert 在同一事务。
-    # 异常向上抛后, 调用方的事务会回滚, "failed" 状态不会持久化。
-    # 真正的可观察失败状态需要独立事务或调用方显式记录 — 见后续 PR。
-    # 当前实现的目的是在事务窗口内给日志/审计一个标记, 而非持久化失败记录。
+    # 5. 批量 insert 新 chunk; 失败时把 document 标为 failed (独立 session 持久化)
+    # 主事务即将回滚 — 用独立 session 持久化 failed 状态。
     try:
         await chunk_repo.bulk_insert(domain_chunks)
-    except Exception:
+    except Exception as exc:
         if document_id is not None:
-            await document_repo.mark_status(
-                document_id, "failed", error_code=PERSIST_INSERT_FAILED
-            )
+            try:
+                async with AsyncSessionLocal() as fail_session:
+                    fail_repo = DocumentRepository(fail_session)
+                    await fail_repo.mark_status(
+                        document_id, "failed", error_code=PERSIST_INSERT_FAILED
+                    )
+                    await fail_session.commit()
+            except Exception as inner_exc:
+                logger.warning(
+                    "failed to persist document_id=%s failed status: %s",
+                    document_id,
+                    inner_exc,
+                )
         raise
 
     # 6. 标记 document 为 completed (必须在 commit 前, 同一事务持久化)
