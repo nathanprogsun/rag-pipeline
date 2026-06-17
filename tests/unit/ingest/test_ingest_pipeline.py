@@ -342,7 +342,9 @@ class _FakeDocumentRepo:
         self.status = status
         self.marked.append((status, error_code))
 
-    async def get_active(self, dataset_id: uuid.UUID, filename: str) -> MagicMock | None:
+    async def get_active(
+        self, dataset_id: uuid.UUID, filename: str
+    ) -> MagicMock | None:
         if self.status == "running":
             doc = MagicMock()
             doc.id = self.document_id

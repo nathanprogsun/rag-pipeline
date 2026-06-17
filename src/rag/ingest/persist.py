@@ -106,9 +106,7 @@ class PersistResult:
         )
 
 
-async def _mark_document_failed(
-    document_id: uuid.UUID, error_code: str
-) -> None:
+async def _mark_document_failed(document_id: uuid.UUID, error_code: str) -> None:
     """在独立 session 中把 document 标为 failed。
 
     落库失败时主事务会回滚, 因此用独立 session 持久化 failed 状态。
@@ -192,7 +190,9 @@ async def persist(
     existing_doc: object | None = None
     if filename:
         existing_doc = await doc_repo.get_active(ds.id, filename)
-    is_resume = existing_doc is not None and getattr(existing_doc, "status", None) == "running"
+    is_resume = (
+        existing_doc is not None and getattr(existing_doc, "status", None) == "running"
+    )
 
     # 3. upsert document (status -> "running", generation += 1)
     document_id: uuid.UUID
