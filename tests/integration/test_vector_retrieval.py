@@ -10,6 +10,7 @@ from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
 from rag.infra.pg.vector_store import VectorRetriever
 from tests._fakes import ConstantEmbeddings
+from tests.integration._db_helpers import create_document
 
 EMBED_DIM = 1536
 
@@ -49,12 +50,17 @@ def _session_context_manager(session: AsyncSession) -> MagicMock:
 @pytest.mark.asyncio
 async def test_hnsw_index_actually_used(db_session: AsyncSession) -> None:
     dataset_id = await _create_dataset(db_session)
+    doc_id = await create_document(
+        db_session, dataset_id, filename="vec.md", total_chunks=3
+    )
     for i, text in enumerate(["text 0", "text 1", "text 2"]):
         db_session.add(
             ChunkModel(
                 dataset_id=dataset_id,
+                document_id=doc_id,
                 text=text,
                 embedding=_unit_vector(i),
+                chunk_index=i,
             )
         )
     await db_session.commit()

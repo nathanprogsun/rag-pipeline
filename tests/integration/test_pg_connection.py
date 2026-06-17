@@ -12,7 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
+from rag.infra.pg.models.document import DocumentModel
 from rag.infra.pg.repositories.chunk_repo import ChunkRepository
+
+
+async def _seed_document(
+    db_session: AsyncSession, dataset_id: uuid.UUID, *, filename: str
+) -> uuid.UUID:
+    """Upsert 一个 document, 返回 id (满足 chunks.document_id FK)。"""
+    doc = DocumentModel(
+        dataset_id=dataset_id,
+        filename=filename,
+        status="completed",
+        total_chunks=1,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    return doc.id
 
 
 @pytest.mark.asyncio
@@ -42,10 +58,11 @@ async def test_chunk_repository_roundtrip(db_session: AsyncSession) -> None:
     ds = DatasetModel(id=uuid.uuid4(), name="t", embed_model="m", embed_dim=1536)
     db_session.add(ds)
     await db_session.flush()
+    doc_id = await _seed_document(db_session, ds.id, filename="rt.pdf")
 
     c = ChunkModel(
         dataset_id=ds.id,
-        document_id=uuid.uuid4(),
+        document_id=doc_id,
         text="test content",
         embedding=[0.0] * 1535 + [1.0],
     )
@@ -65,10 +82,11 @@ async def test_soft_delete_excludes_rows(db_session: AsyncSession) -> None:
     ds = DatasetModel(id=uuid.uuid4(), name="t", embed_model="m", embed_dim=1536)
     db_session.add(ds)
     await db_session.flush()
+    doc_id = await _seed_document(db_session, ds.id, filename="doc.pdf")
 
     c = ChunkModel(
         dataset_id=ds.id,
-        document_id=uuid.uuid4(),
+        document_id=doc_id,
         text="to delete",
         filename="doc.pdf",
         embedding=[0.0] * 1535 + [1.0],

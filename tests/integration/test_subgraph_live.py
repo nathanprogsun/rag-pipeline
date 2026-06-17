@@ -24,6 +24,7 @@ from tests._fakes import ConstantEmbeddings
 from tests.integration._db_helpers import (
     EMBED_DIM,
     create_dataset,
+    create_document,
     set_ts_tokens,
 )
 from tests.integration._retriever import RepoRetriever
@@ -61,11 +62,18 @@ async def test_subgraph_fuses_vector_and_fulltext(
     - SearchSubgraph returns all 3 chunks, top by RRF.
     """
     dataset_id = await create_dataset(db_session, "subgraph-fuse-test")
+    doc_id = await create_document(
+        db_session, dataset_id, filename="fuse.md", total_chunks=3
+    )
 
     chunks = []
-    for chunk_text in ["Python 教程", "Python 入门", "Python 进阶"]:
+    for i, chunk_text in enumerate(["Python 教程", "Python 入门", "Python 进阶"]):
         chunk = ChunkModel(
-            dataset_id=dataset_id, text=chunk_text, embedding=_unit_vector(0)
+            dataset_id=dataset_id,
+            document_id=doc_id,
+            text=chunk_text,
+            embedding=_unit_vector(0),
+            chunk_index=i,
         )
         db_session.add(chunk)
         chunks.append(chunk)
@@ -113,10 +121,12 @@ async def test_subgraph_vector_only_match(
 ) -> None:
     """Vector match exists, fulltext does not -> still returns results."""
     dataset_id = await create_dataset(db_session, "subgraph-vector-only-test")
+    doc_id = await create_document(db_session, dataset_id, filename="vo.md")
 
     # Embedding matches, but fulltext content is different
     chunk = ChunkModel(
         dataset_id=dataset_id,
+        document_id=doc_id,
         text="zzz unmatched text",
         embedding=_unit_vector(0),
     )
@@ -224,10 +234,16 @@ async def test_subgraph_per_dataset_isolation(
     """Two datasets; each subgraph returns only its own dataset's chunks."""
     ds_a = await create_dataset(db_session, "subgraph-isolation-a")
     ds_b = await create_dataset(db_session, "subgraph-isolation-b")
+    doc_a = await create_document(db_session, ds_a, filename="a.md")
+    doc_b = await create_document(db_session, ds_b, filename="b.md")
 
-    chunk_a = ChunkModel(dataset_id=ds_a, text="in A", embedding=_unit_vector(0))
+    chunk_a = ChunkModel(
+        dataset_id=ds_a, document_id=doc_a, text="in A", embedding=_unit_vector(0)
+    )
     db_session.add(chunk_a)
-    chunk_b = ChunkModel(dataset_id=ds_b, text="in B", embedding=_unit_vector(0))
+    chunk_b = ChunkModel(
+        dataset_id=ds_b, document_id=doc_b, text="in B", embedding=_unit_vector(0)
+    )
     db_session.add(chunk_b)
     await db_session.flush()
     await set_ts_tokens(db_session, chunk_a)

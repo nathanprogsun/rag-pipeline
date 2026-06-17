@@ -63,6 +63,30 @@ async def create_dataset(
     return ds.id
 
 
+async def create_document(
+    db_session: AsyncSession,
+    dataset_id: uuid.UUID,
+    *,
+    filename: str | None = None,
+    total_chunks: int = 1,
+) -> uuid.UUID:
+    """Upsert 一个 document 行, 返回 id。
+
+    用于直接构造 ``ChunkModel`` 的测试: ``chunks.document_id`` 是 NOT NULL FK
+    指向 ``documents.id``, 必须先存在 document 行才能写 chunk。
+    缺省 ``filename`` 时拼一个匿名 ``_seed_<uuid>`` 防止与已有行冲突。
+    """
+    doc = DocumentModel(
+        dataset_id=dataset_id,
+        filename=filename or f"_seed_{uuid.uuid4().hex}",
+        status="completed",
+        total_chunks=total_chunks,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    return doc.id
+
+
 async def seed_chunks(
     db_session: AsyncSession,
     *,
@@ -91,35 +115,33 @@ async def seed_chunks(
         modalities: 与 ``texts`` 等长的 modality 列表。
         image_paths: 与 ``texts`` 等长的 ``image_path`` 列表。
         document_id: 显式指定 chunk 所属 document 行; 缺省时 helper 自动
-            upsert 一个 (filename 必传, 否则退化为随机 UUID — 仅在测试 chunk
-            关系本身时可用)。
+            upsert 一个 (filename 缺省时拼一个匿名 ``_seed_<uuid>``,
+            保证 chunks.document_id FK 满足)。
         filename: 与 document 行关联的 filename; 仅在未传 ``document_id`` 时
-            必传。
+            生效, 缺省时由 helper 自动生成匿名值。
 
     Returns:
         新建的 ``ChunkModel`` 列表 (含分配 id 与 embedding)。
     """
     if document_id is None:
-        if filename is None:
-            # 退化路径: 测试不关心 document 关系, 给一个 random UUID。
-            # 注意: 该 UUID 不对应实际 document 行, 若外层 DB 有 FK 校验
-            # 会失败 — 真实测试场景应显式传 filename。
-            document_id = uuid.uuid4()
-        else:
-            doc = DocumentModel(
-                dataset_id=dataset_id,
-                filename=filename,
-                status="completed",
-                total_chunks=len(texts),
-            )
-            db_session.add(doc)
-            await db_session.flush()
-            document_id = doc.id
+        # chunks.document_id 是 NOT NULL FK -> documents.id; 必须先 upsert
+        # 一行 document, 否则 INSERT 触发 ForeignKeyViolationError。
+        doc = DocumentModel(
+            dataset_id=dataset_id,
+            filename=filename or f"_seed_{uuid.uuid4().hex}",
+            status="completed",
+            total_chunks=len(texts),
+        )
+        db_session.add(doc)
+        await db_session.flush()
+        document_id = doc.id
 
     embeddings: list[list[float]] = await embed_model.aembed_documents(texts)
     n = len(texts)
     titles = parent_titles if parent_titles is not None else [""] * n
-    indices = chunk_indices if chunk_indices is not None else [0] * n
+    # chunks (document_id, chunk_index) 在 deleted_at IS NULL 上唯一; 默认
+    # 给 range(n) 而非 [0]*n, 否则同 doc 多 chunk 立刻触发 UniqueViolationError。
+    indices = chunk_indices if chunk_indices is not None else list(range(n))
     modality_list = modalities if modalities is not None else ["text"] * n
     image_path_list = image_paths if image_paths is not None else [None] * n
     chunks: list[ChunkModel] = []

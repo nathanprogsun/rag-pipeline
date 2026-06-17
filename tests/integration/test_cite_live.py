@@ -33,6 +33,7 @@ from rag.search.orchestrator import SearchPipeline
 from rag.search.post.cite import SimpleCite
 from tests.integration._db_helpers import (
     create_dataset,
+    create_document,
     seed_chunks,
 )
 from tests.integration._retriever import make_subgraph
@@ -105,6 +106,9 @@ async def test_real_cite_image_caption_preserves_image_path(
     image_path 从 ScoredDocument 正确传到 Citation。
     """
     ds = await create_dataset(db_session, "cite-img")
+    doc_id = await create_document(
+        db_session, ds, filename="cite-img.md", total_chunks=2
+    )
     text_emb = (await live_embed_model.aembed_documents(["Python 教程 列表推导式"]))[0]
     img_emb = (
         await live_embed_model.aembed_documents(
@@ -113,14 +117,20 @@ async def test_real_cite_image_caption_preserves_image_path(
     )[0]
 
     text_chunk = ChunkModel(
-        dataset_id=ds, text="Python 教程 列表推导式", embedding=text_emb
+        dataset_id=ds,
+        document_id=doc_id,
+        text="Python 教程 列表推导式",
+        embedding=text_emb,
+        chunk_index=0,
     )
     img_chunk = ChunkModel(
         dataset_id=ds,
+        document_id=doc_id,
         text="(image caption) Python 列表推导式代码截图",
         embedding=img_emb,
         modality="image_caption",
         image_path="/img/python-syntax.png",
+        chunk_index=1,
     )
     db_session.add_all([text_chunk, img_chunk])
     await db_session.flush()

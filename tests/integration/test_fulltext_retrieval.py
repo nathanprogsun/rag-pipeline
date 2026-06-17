@@ -11,6 +11,7 @@ from rag.infra.pg.chinese_tokenizer import ChineseTokenizer
 from rag.infra.pg.fulltext_store import FulltextRetriever
 from rag.infra.pg.models.chunk import ChunkModel
 from rag.infra.pg.models.dataset import DatasetModel
+from rag.infra.pg.models.document import DocumentModel
 
 EMBED_DIM = 1536
 
@@ -29,6 +30,20 @@ async def _create_dataset(db_session: AsyncSession) -> uuid.UUID:
     db_session.add(ds)
     await db_session.flush()
     return ds.id
+
+
+async def _seed_document(
+    db_session: AsyncSession, dataset_id: uuid.UUID, *, filename: str
+) -> uuid.UUID:
+    doc = DocumentModel(
+        dataset_id=dataset_id,
+        filename=filename,
+        status="completed",
+        total_chunks=1,
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    return doc.id
 
 
 def _session_context_manager(session: AsyncSession) -> MagicMock:
@@ -50,8 +65,10 @@ async def _set_tsvector(
 @pytest.mark.asyncio
 async def test_chinese_tokenization_and_search(db_session: AsyncSession) -> None:
     dataset_id = await _create_dataset(db_session)
+    doc_id = await _seed_document(db_session, dataset_id, filename="ft.md")
     chunk = ChunkModel(
         dataset_id=dataset_id,
+        document_id=doc_id,
         text="Python 教程 入门",
         embedding=_embedding(),
     )

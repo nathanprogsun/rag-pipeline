@@ -26,6 +26,7 @@ def _bind_global_cache(test_cache: Cache) -> None:
 @pytest.fixture
 async def redis_cache() -> AsyncGenerator[Cache]:
     test_cache = Cache(url=TEST_REDIS_URL)
+    await test_cache.connect()
     yield test_cache
     await test_cache.close()
 
@@ -47,12 +48,14 @@ class TestCacheConnection:
 
     async def test_unavailable_returns_none(self) -> None:
         cache = Cache(url="redis://127.0.0.1:1")
+        await cache.connect()
         result = await cache.get("any")
         assert result is None
         await cache.close()
 
     async def test_unavailable_appends_warning(self) -> None:
         cache = Cache(url="redis://127.0.0.1:1")
+        await cache.connect()
         warnings: list[str] = []
         result = await cache.get("any", layer="L1", warnings=warnings)
         assert result is None
