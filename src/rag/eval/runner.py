@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from rag.domain.search import SearchRequest, SearchResult
+from rag.domain.search import RetrievalConfig, SearchRequest, SearchResult
 from rag.eval._jsonl import load_jsonl
 from rag.eval.artifacts import ArtifactWriter
 from rag.eval.backends import GenMetricsBackend, get_backend
@@ -204,6 +204,7 @@ class UnifiedEvalRunner:
             request = SearchRequest(
                 query=record.query,
                 dataset_ids=record.dataset_ids,
+                retrieval=RetrievalConfig(top_k=k),
             )
             response = await self.pipeline(request)
             retrieved_ids = [hit.chunk_id for hit in response._intermediate_hits]

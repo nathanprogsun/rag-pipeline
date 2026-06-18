@@ -1,6 +1,6 @@
 """``rag-search`` Typer CLI: query → SearchResult。
 
-通过 ``build_search_pipeline`` 装配 pipeline 并执行检索 + 生成。
+通过 ``SearchPipeline`` 执行检索 + 生成。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
 from rag.infra.observability.audit import AuditTap
-from rag.search.factory import SearchPipelineDeps, build_search_pipeline
+from rag.search.orchestrator import SearchPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -238,15 +238,13 @@ def main(
             path.parent.mkdir(parents=True, exist_ok=True)
             audit_tap = AuditTap(path, sample_rate=1.0, sync=True)
 
-    deps = SearchPipelineDeps(
+    pipeline = SearchPipeline(
         embedder=embedder,
         llm=llm,
         rerank_client=rerank,
         audit_tap=audit_tap,
-        top_k=top_k,
         rerank_weight=rerank_weight,
     )
-    pipeline = build_search_pipeline(deps)
     assert dataset_id is not None
     req = SearchRequest(
         query=q,

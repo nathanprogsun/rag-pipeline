@@ -106,7 +106,7 @@ docstrings; for entry points see [`dev.md`](dev.md).
 |---|---|---|
 | 1 intra_fusion signature | `rag.search.retrieve.fusion.intra_fusion` | query-variant semantics |
 | 2 score_breakdown semantics | `rag.search.post.filter.filter_by_score` | per-source max merge |
-| 3 typed Pipeline.ainvoke | `rag.search.factory.build_search_pipeline` | SearchPipelineDeps + Pipeline Protocol |
+| 3 typed Pipeline.ainvoke | `rag.search.orchestrator.SearchPipeline` | `SearchRequest` + production/test 双模式 |
 | 4 SearchResult.response | `rag.search.orchestrator` | LLM answer, not prompt |
 | 5 [id](CITE) inline | `rag.search.post.cite.SimpleCite` + `rag.infra.text.citation_check` parser | 1-based |
 | 6 _intermediate_hits | `rag.domain.search.SearchResult` | PrivateAttr, excluded from JSON |

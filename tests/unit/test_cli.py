@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
@@ -104,11 +105,11 @@ def test_search_text_output_runs_pipeline() -> None:
     with (
         patch("rag.search.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.search.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.search.cli.build_search_pipeline") as mock_build,
+        patch("rag.search.cli.SearchPipeline") as mock_pipeline_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock(return_value=fake_result)
-        mock_build.return_value = mock_pipeline
+        mock_pipeline_cls.return_value = mock_pipeline
 
         result = runner.invoke(
             search_app,
@@ -130,11 +131,11 @@ def test_search_json_output_serializes() -> None:
     with (
         patch("rag.search.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.search.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.search.cli.build_search_pipeline") as mock_build,
+        patch("rag.search.cli.SearchPipeline") as mock_pipeline_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock(return_value=fake_result)
-        mock_build.return_value = mock_pipeline
+        mock_pipeline_cls.return_value = mock_pipeline
 
         result = runner.invoke(
             search_app,
@@ -160,39 +161,57 @@ def test_search_json_output_serializes() -> None:
 
 def test_search_audit_writes_to_path(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """--audit + --audit-path writes one NDJSON line.
-
-    The mock pipeline here is a real _SearchPipelineImpl with a real
-    audit_tap so we can verify end-to-end audit flow (otherwise the
-    audit logic is inside build_search_pipeline and a MagicMock would
-    bypass it).
-    """
-    from rag.search.factory import SearchPipelineDeps, _SearchPipelineImpl
+    """--audit + --audit-path writes one NDJSON line via SearchPipeline._maybe_record_audit."""
+    from rag.domain.document import ChunkMetadata
+    from rag.infra.observability.audit import AuditTap
+    from rag.search.orchestrator import SearchPipeline
 
     audit_file = tmp_path / "audit.jsonl"
-    fake_result = _search_result()
     fake_embedder = MagicMock()
     fake_llm = MagicMock()
-    audit_tap = MagicMock()
-    audit_tap.file_path = audit_file
-    audit_tap.record = AsyncMock()
+    ai = MagicMock()
+    ai.content = "answer"
+    fake_llm.ainvoke = AsyncMock(return_value=ai)
 
-    deps = SearchPipelineDeps(
+    async def _mock_search_vector(self: object, query: str, top_k: int = 10) -> list:
+        from rag.domain.document import ScoredDocument
+
+        return [
+            ScoredDocument(
+                chunk_id=uuid.uuid4(),
+                dataset_id=self.dataset_id,  # type: ignore[attr-defined]
+                text="hello",
+                score=0.9,
+                rank=0,
+                source="vector",
+                metadata=ChunkMetadata(datasource="file"),
+            )
+        ]
+
+    async def _mock_search_fulltext(self: object, query: str, top_k: int = 10) -> list:
+        return []
+
+    monkeypatch.setattr(
+        "rag.infra.pg.vector_store.VectorRetriever.search",
+        _mock_search_vector,
+    )
+    monkeypatch.setattr(
+        "rag.infra.pg.fulltext_store.FulltextRetriever.search",
+        _mock_search_fulltext,
+    )
+
+    real_pipeline = SearchPipeline(
         embedder=fake_embedder,
         llm=fake_llm,
-        audit_tap=audit_tap,
-    )
-    real_pipeline = _SearchPipelineImpl(deps=deps)
-    # Mock the orchestrator's ainvoke to return fake_result without real DB calls
-    real_pipeline._build_search_pipeline = MagicMock(  # type: ignore[method-assign]
-        return_value=MagicMock(ainvoke=AsyncMock(return_value=fake_result))
+        audit_tap=AuditTap(audit_file, sample_rate=1.0, sync=True),
     )
 
     with (
         patch("rag.search.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.search.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.search.cli.build_search_pipeline", return_value=real_pipeline),
+        patch("rag.search.cli.SearchPipeline", return_value=real_pipeline),
     ):
         result = runner.invoke(
             search_app,
@@ -204,13 +223,13 @@ def test_search_audit_writes_to_path(
                 "--audit",
                 "--audit-path",
                 str(audit_file),
+                "--no-query-ext",
             ],
         )
 
     assert result.exit_code == 0, f"stderr={result.stderr!r}"
-    # CLI's _err_exit skipped audit_tap because --audit-path was provided
-    # → audit_tap.record should be called once via the real _SearchPipelineImpl
-    audit_tap.record.assert_awaited_once()
+    text = audit_file.read_text(encoding="utf-8").strip()
+    assert len(text.split("\n")) == 1
 
 
 def test_search_audit_no_path_warns(
@@ -227,11 +246,11 @@ def test_search_audit_no_path_warns(
     with (
         patch("rag.search.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.search.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.search.cli.build_search_pipeline") as mock_build,
+        patch("rag.search.cli.SearchPipeline") as mock_pipeline_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock(return_value=fake_result)
-        mock_build.return_value = mock_pipeline
+        mock_pipeline_cls.return_value = mock_pipeline
 
         result = runner.invoke(
             search_app,
@@ -263,11 +282,11 @@ def test_search_multiple_dataset_ids() -> None:
     with (
         patch("rag.search.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.search.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.search.cli.build_search_pipeline") as mock_build,
+        patch("rag.search.cli.SearchPipeline") as mock_pipeline_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock(return_value=fake_result)
-        mock_build.return_value = mock_pipeline
+        mock_pipeline_cls.return_value = mock_pipeline
 
         result = runner.invoke(
             search_app,
@@ -465,7 +484,7 @@ def test_eval_warning_printed_to_stderr(tmp_path: Path) -> None:
 
 
 def test_eval_passes_correct_args_to_runner(tmp_path: Path) -> None:
-    """EvalRunner initialized with --concurrency and pipeline from build_search_pipeline."""
+    """EvalRunner initialized with --concurrency and SearchPipeline.ainvoke."""
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
 
@@ -480,12 +499,12 @@ def test_eval_passes_correct_args_to_runner(tmp_path: Path) -> None:
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.eval.cli.build_search_pipeline") as mock_build,
+        patch("rag.eval.cli.SearchPipeline") as mock_pipeline_cls,
         patch("rag.eval.cli.UnifiedEvalRunner") as mock_runner_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock()
-        mock_build.return_value = mock_pipeline
+        mock_pipeline_cls.return_value = mock_pipeline
 
         mock_runner = MagicMock()
         mock_runner.run = AsyncMock(return_value=fake_summary)
