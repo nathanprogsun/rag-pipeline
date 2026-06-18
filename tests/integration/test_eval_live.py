@@ -3,7 +3,7 @@
 不 mock:
 - 真实 embedding: ``live_embed_model`` fixture
 - 真实 PG: 真实 dataset + chunk
-- 真实 build_search_pipeline (5f) + EvalRunner (5h)
+- 真实 SearchPipeline + EvalRunner (5h)
 - LLM: mock (eval 关注 retrieval, 不需要 LLM 质量)
 
 场景:
@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.eval.config import EvalConfig
 from rag.eval.runner import UnifiedEvalRunner
-from rag.search.factory import SearchPipelineDeps, build_search_pipeline
+from rag.search.orchestrator import SearchPipeline
 from tests.integration._db_helpers import create_dataset, seed_chunks
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,8 +82,7 @@ async def test_real_eval_perfect_match_recall_one(
         encoding="utf-8",
     )
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
     runner = UnifiedEvalRunner(
         pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
     )
@@ -131,8 +130,7 @@ async def test_real_eval_zero_match_recall_zero(
         encoding="utf-8",
     )
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
     runner = UnifiedEvalRunner(
         pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
     )
@@ -197,8 +195,7 @@ async def test_real_eval_multiple_queries_aggregate(
         for r in eval_records:
             f.write(json.dumps(r) + "\n")
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
     runner = UnifiedEvalRunner(
         pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
     )
@@ -251,8 +248,7 @@ async def test_real_eval_hit_rate_at_k(
         encoding="utf-8",
     )
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
     runner = UnifiedEvalRunner(
         pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
     )

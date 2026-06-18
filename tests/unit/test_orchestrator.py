@@ -18,7 +18,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from rag.domain.document import ChunkMetadata, ScoredDocument
-from rag.domain.search import Citation, ContextConfig, SearchRequest, SearchResult
+from rag.domain.search import (
+    Citation,
+    ContextConfig,
+    RetrievalConfig,
+    SearchRequest,
+    SearchResult,
+)
 from rag.search.orchestrator import (
     SearchPipeline,
     _dedup_by_chunk_id,
@@ -120,7 +126,7 @@ def test_init_default_rrf_k_is_60() -> None:
     ds_id = uuid.uuid4()
     sg = _make_subgraph(dataset_id=ds_id, hits_by_query={})
     orch = SearchPipeline(subgraphs={ds_id: sg})
-    assert orch.rrf_k == 60
+    assert orch._rrf_k == 60
 
 
 # ---------- ainvoke: identity / variants ----------
@@ -301,11 +307,12 @@ async def test_ainvoke_filter_by_score_applied() -> None:
             ]
         },
     )
-    orch = SearchPipeline(
-        subgraphs={ds_id: sg},
-        filter_score_threshold=0.5,
+    orch = SearchPipeline(subgraphs={ds_id: sg})
+    req = SearchRequest(
+        query="q",
+        dataset_ids=[ds_id],
+        retrieval=RetrievalConfig(score_threshold=0.5),
     )
-    req = _req(dataset_ids=[ds_id])
 
     result = await orch.ainvoke(req)
 
@@ -326,8 +333,12 @@ async def test_ainvoke_no_filter_when_threshold_is_none() -> None:
             ]
         },
     )
-    orch = SearchPipeline(subgraphs={ds_id: sg}, filter_score_threshold=None)
-    req = _req(dataset_ids=[ds_id])
+    orch = SearchPipeline(subgraphs={ds_id: sg})
+    req = SearchRequest(
+        query="q",
+        dataset_ids=[ds_id],
+        retrieval=RetrievalConfig(score_threshold=None),
+    )
 
     result = await orch.ainvoke(req)
 

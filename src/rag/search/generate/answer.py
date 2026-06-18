@@ -28,7 +28,7 @@ class LLMClientLike(Protocol):
     """最小 LLM 接口, 任何 LangChain ``BaseChatModel`` 均可。
 
     不是 Pydantic 字段类型 (Protocol 无法作为 Pydantic 类型), 在
-    ``SearchPipelineDeps`` 中使用 ``Any`` 并依赖 duck typing。
+    ``SearchPipeline`` 生产模式中使用 duck typing 注入。
     """
 
     async def ainvoke(self, input: object) -> object: ...

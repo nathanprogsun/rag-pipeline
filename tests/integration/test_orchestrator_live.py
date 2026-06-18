@@ -36,7 +36,7 @@ from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rag.domain.document import ScoredDocument
-from rag.domain.search import Citation, SearchRequest
+from rag.domain.search import Citation, RetrievalConfig, SearchRequest
 from rag.search.orchestrator import SearchPipeline
 from tests.integration._db_helpers import (
     create_dataset,
@@ -345,12 +345,13 @@ async def test_real_score_filter_drops_irrelevant(
     sorted_scores = sorted(scores, reverse=True)
     median_threshold = sorted_scores[len(sorted_scores) // 2]
 
-    orch_filtered = SearchPipeline(
-        subgraphs=subgraphs,
-        filter_score_threshold=median_threshold,
-    )
+    orch_filtered = SearchPipeline(subgraphs=subgraphs)
     result_filtered = await orch_filtered.ainvoke(
-        SearchRequest(query="Python 教程", dataset_ids=list(ids.values()))
+        SearchRequest(
+            query="Python 教程",
+            dataset_ids=list(ids.values()),
+            retrieval=RetrievalConfig(score_threshold=median_threshold),
+        )
     )
     filtered_chunks = result_filtered._intermediate_hits
     # 阈值过滤后, 所有保留 chunk 的 score_breakdown[vector] >= median_threshold
@@ -705,14 +706,17 @@ async def test_real_full_chain_with_all_callbacks(
     }
     orch = SearchPipeline(
         subgraphs=subgraphs,
-        filter_score_threshold=0.0,  # 全部保留 (真实 cosine 通常 > 0)
         token_budget=50_000,  # 50K token, 正常 chunk 都装得下
         cite=FullCite(),
         gen=full_gen,
     )
 
     result = await orch.ainvoke(
-        SearchRequest(query="Python 数据分析", dataset_ids=list(ids.values()))
+        SearchRequest(
+            query="Python 数据分析",
+            dataset_ids=list(ids.values()),
+            retrieval=RetrievalConfig(score_threshold=0.0),
+        )
     )
 
     # 跨 dataset 召回

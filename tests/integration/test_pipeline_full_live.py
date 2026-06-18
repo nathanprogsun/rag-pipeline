@@ -1,4 +1,4 @@
-"""build_search_pipeline 集成测试 — 真实 PG + 真实 embedding + 真实 NDJSON audit。
+"""SearchPipeline 集成测试 — 真实 PG + 真实 embedding + 真实 NDJSON audit。
 
 不 mock:
 - 真实 embedding: ``live_embed_model`` fixture (DashScope text-embedding-v4)
@@ -9,7 +9,7 @@
 - LLM: mock (因为真实 LLM 调用昂贵且不在本任务范围; 通过 mock llm.ainvoke)
 
 场景:
-- 真实 build_search_pipeline → 真实 orchestrator + 真实 audit
+- 真实 SearchPipeline → 真实 orchestrator + 真实 audit
 - 真实 ainvoke → SearchResult 含 _intermediate_hits / citations / response
 - 真实 audit round-trip: write → read_jsonl_records
 - 真实 embedding 链路: aembed_documents (seed) → aembed_query (query) → pgvector HNSW
@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rag.domain.search import SearchRequest
 from rag.infra.observability.audit import AuditTap, read_jsonl_records
-from rag.search.factory import SearchPipelineDeps, build_search_pipeline
+from rag.search.orchestrator import SearchPipeline
 from tests.integration._db_helpers import create_dataset, seed_chunks
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,8 +77,7 @@ async def test_real_build_full_pipeline_end_to_end(
         embed_model=live_embed_model,
     )
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
 
     req = SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
     result = await pipeline.ainvoke(req)
@@ -121,12 +120,11 @@ async def test_real_build_full_pipeline_with_audit(
     )
 
     audit_path = tmp_path / "audit.jsonl"
-    deps = SearchPipelineDeps(
+    pipeline = SearchPipeline(
         embedder=live_embed_model,
         llm=_fake_llm(),
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_search_pipeline(deps)
     req = SearchRequest(query="Python 数据分析", dataset_ids=[ds], audit=True)
 
     await pipeline.ainvoke(req)
@@ -149,8 +147,7 @@ async def test_real_build_full_pipeline_failed_dataset(
     不需要 db_session (没有 seed 数据)。真实 embedding API 仍被调用
     (VectorRetriever.search → aembed_query), 但检索结果为空 (PG 无对应 dataset)。
     """
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
 
     fake_ds = uuid.uuid4()  # PG 中无对应 chunk
     req = SearchRequest(query="test", dataset_ids=[fake_ds])
@@ -185,12 +182,11 @@ async def test_real_build_full_pipeline_multiple_requests(
     )
 
     audit_path = tmp_path / "audit.jsonl"
-    deps = SearchPipelineDeps(
+    pipeline = SearchPipeline(
         embedder=live_embed_model,
         llm=_fake_llm(response_text="answer"),
         audit_tap=AuditTap(audit_path, sample_rate=1.0, sync=True),
     )
-    pipeline = build_search_pipeline(deps)
 
     queries = ["Python", "Python 教程", "Python 数据分析"]
     for q in queries:
@@ -225,8 +221,7 @@ async def test_real_build_full_pipeline_cosine_ranking(
         embed_model=live_embed_model,
     )
 
-    deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=live_embed_model, llm=_fake_llm())
     req = SearchRequest(query="Python 列表推导式", dataset_ids=[ds])
 
     result = await pipeline.ainvoke(req)

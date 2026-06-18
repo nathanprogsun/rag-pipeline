@@ -26,7 +26,7 @@ from rag.eval.runner import UnifiedEvalRunner, UnifiedEvalSummary
 from rag.infra.llm.chat import get_chat_model
 from rag.infra.llm.embed import get_embed_model
 from rag.infra.llm.rerank import get_rerank_model
-from rag.search.factory import SearchPipelineDeps, build_search_pipeline
+from rag.search.orchestrator import SearchPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +180,7 @@ def main(
     except Exception as e:
         _err_exit(f"构建依赖失败: {e!r}")
 
-    deps = SearchPipelineDeps(embedder=embedder, llm=llm, rerank_client=rerank, top_k=k)
-    pipeline = build_search_pipeline(deps)
+    pipeline = SearchPipeline(embedder=embedder, llm=llm, rerank_client=rerank)
 
     gate = GateThresholds(
         min_recall_at_k=min_recall_at_k,
