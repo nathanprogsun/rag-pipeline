@@ -4,7 +4,8 @@
 [![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 
-> 面向中文量化策略文档的 RAG 引擎——混合检索、评估门禁、异步全链路。
+> 面向中文技术文档的 RAG 引擎——混合检索、评估门禁、异步全链路。
+> 适用于代码文档、研究报告、企业内部知识库等场景。
 
 ---
 
@@ -129,6 +130,14 @@ score = sum(weight / (k + rank))
 
 向量擅长语义相似，全文擅长精确匹配——双路互补，针对代码文档的混合场景特别有效。
 
+### 评估门禁（质量闭环）
+
+每个 PR/部署前自动跑 RAGAS 指标（faithfulness、answer_relevance、context_precision）+ 检索指标（recall@k、MRR、NDCG）。**低于阈值自动阻断**，支持基线回归检测——调了检索逻辑但指标跌了，CI 会挡。
+
+### 异步全链路 + 容错
+
+从文件读取、LLM 改写、多路检索到生成，全程 `async`，无阻塞等待。单组件失败（如某个 subgraph 超时）自动 **fail-open** 降级，不影响其余结果。
+
 ### 多级缓存
 
 | 层级 | 缓存内容 | TTL |
@@ -140,18 +149,9 @@ score = sum(weight / (k + rank))
 
 DB chunk 变更时主动失效关联缓存，Redis 不可用自动降级。
 
-### 评估 + 质量门禁
+### 中文适配
 
-```
-eval.jsonl (每行一条):
-  {"query":"小市值策略","dataset_ids":[...],"ground_truth_chunk_ids":[...],"k":10}
-
-输出指标:
-  recall@k  precision@k  hit_rate@k  mrr  ndcg@k
-  均值 / 标准差 / 最小值 / 最大值 / 中位数 / 计数
-
-质量门禁: 某指标低于阈值 → 阻断部署
-```
+jieba 分词 + 中文标点感知的 chunk 策略 + MiniMax-M3 / DashScope 中文 LLM——确保中文术语的检索和生成都准确。
 
 ---
 
@@ -187,7 +187,7 @@ uv run rag-search -q "Python 列表推导式" --dataset-id "$DS"
 |------|------|
 | 类型系统 | mypy strict（`disallow_untyped_defs=true`） |
 | 代码检查 | ruff（ANN/B/E/F/I/UP/PGH 全开） |
-| 测试 | pytest + pytest-asyncio，107 个测试文件，781 个用例 |
+| 测试 | pytest + pytest-asyncio，812 个用例（716 单元 + 集成） |
 | 覆盖率 | 92%（门禁 80%） |
 | CI | GitHub Actions：lint → mypy → unit → integration → coverage |
 
