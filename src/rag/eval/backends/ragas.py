@@ -1,17 +1,17 @@
-"""真实 RAGAS 指标 (ragas 0.3.9) 包装, 接口与 stub 对称。
+"""RagasBackend: 真实 RAGAS (ragas 0.3.9) backend。
 
-- ``faithfulness``: LLM-as-judge 校验 answer claim 是否在 context 中
-- ``answer_relevancy``: query/answer embedding 余弦相似度均值
-- ``context_precision``: 位置感知的 retrieved vs reference 精度
+- ``faithfulness``: LLM-as-judge 校验 answer claim 是否在 context 中。
+- ``answer_relevancy``: query/answer embedding 余弦相似度均值。
+- ``context_precision``: 位置感知的 retrieved vs reference 精度。
 
 通过 ``SingleTurnSample`` + ``single_turn_score`` 异步接口计算。
+单指标失败时该键缺失, 不抛异常, 行为与 ``NaiveBackend`` 对齐。
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable
-from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from ragas.dataset_schema import SingleTurnSample
@@ -39,8 +39,7 @@ class LangChainEmbeddings(Protocol):
     async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
 
 
-@dataclass
-class RagasRealRunner:
+class RagasBackend:
     """在单个 (query, answer, contexts) 样本上计算真实 RAGAS 指标。
 
     使用 LangChain chat 模型驱动 faithfulness 的 LLM judge,
@@ -51,13 +50,11 @@ class RagasRealRunner:
         embeddings: LangChain ``Embeddings``, 用于 embedding 类指标。
     """
 
-    llm: LangChainLLM
-    embeddings: LangChainEmbeddings
+    name: str = "ragas"
 
-    def __post_init__(self) -> None:
-        """将 LLM 与 embeddings 绑定到各指标 (ragas 0.3 要求)。"""
-        wrapped_llm = LangchainLLMWrapper(self.llm)
-        wrapped_embeddings = LangchainEmbeddingsWrapper(self.embeddings)
+    def __init__(self, llm: LangChainLLM, embeddings: LangChainEmbeddings) -> None:
+        wrapped_llm = LangchainLLMWrapper(llm)
+        wrapped_embeddings = LangchainEmbeddingsWrapper(embeddings)
 
         self._faithfulness = faithfulness
         self._faithfulness.llm = wrapped_llm
@@ -73,21 +70,31 @@ class RagasRealRunner:
     async def compute(
         self,
         *,
-        user_input: str,
-        response: str,
-        retrieved_contexts: list[str],
+        query: str,
+        answer: str,
+        contexts: list[str],
         reference: str = "",
+        retrieved_chunk_ids: list[str] | None = None,  # noqa: ARG002
+        ground_truth_chunk_ids: list[str] | None = None,  # noqa: ARG002
+        **_: object,
     ) -> dict[str, float]:
-        """计算单个样本的 3 项指标。
+        """计算 3 项 RAGAS 指标。失败项在返回值中缺失。
+
+        Args:
+            query: 用户原始 query。
+            answer: pipeline 生成的答案。
+            contexts: 喂给 LLM 的上下文文本列表。
+            reference: ground truth 答案。
+            retrieved_chunk_ids: 当前 backend 不使用 (LLM judge 内部处理)。
+            ground_truth_chunk_ids: 当前 backend 不使用。
 
         Returns:
-            ``{faithfulness, answer_relevancy, context_precision}`` 字典,
-            各值范围 ``[0, 1]``。指标异常时该键缺失 (记录 warning 后跳过)。
+            ``{faithfulness, answer_relevancy, context_precision}`` 子集。
         """
         sample = SingleTurnSample(
-            user_input=user_input,
-            response=response,
-            retrieved_contexts=retrieved_contexts,
+            user_input=query,
+            response=answer,
+            retrieved_contexts=contexts,
             reference=reference,
         )
         out: dict[str, float] = {}
@@ -106,7 +113,7 @@ class RagasRealRunner:
                 logger.warning(
                     "RAGAS %s failed for query=%r: %r",
                     name,
-                    user_input,
+                    query,
                     e,
                 )
         return out

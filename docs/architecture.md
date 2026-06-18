@@ -16,21 +16,20 @@ docstrings; for entry points see [`dev.md`](dev.md).
 │   Ingest     │  │   Search Pipeline   │  │    Eval Pipeline     │
 │  (pre-M1)    │  │       (5a-5f)       │  │       (5h-5i)       │
 │              │  │                     │  │                     │
-│ FileSource   │  │ SearchPipeline      │  │ EvalRunner           │
-│ UrlSource    │  │   ├ 1 QueryExt      │  │   ├ Metrics:         │
-│ Normalizer   │  │   ├ 2 Subgraph×N    │  │   │  recall/precision│
-│ Chunker      │  │   │   (intra-fuse)  │  │   │  hit_rate/mrr/    │
-│              │  │   ├ 3 InterVariant  │  │   │  ndcg            │
-└──────┬───────┘  │   ├ 4-5 Rerank      │  │   │                  │
-       │          │   ├ 7 Filter        │  │   └ RagasRunner      │
-       │          │   ├ 8 ParentDoc     │  │     (stub metrics)   │
-       │          │   ├ 9 Cite          │  └──────────┬───────────┘
-       │          │   └ 10 Gen (LLM)    │             │
-       │          │                     │             ▼
-       │          │ Citation DTOs +     │  ┌─────────────────────┐
-       │          │ SearchResult (Pydantic)  │   Audit (5e)          │
-       │          └──────────┬──────────┘ │   └ NDJSON per request│
-       │                     │            └─────────────────────┘
+│ FileSource   │  │ SearchPipeline      │  │ UnifiedEvalRunner    │
+│ UrlSource    │  │   ├ 1 QueryExt      │  │   ├ EvalConfig       │
+│ Normalizer   │  │   ├ 2 Subgraph×N    │  │   ├ GenMetricsBackend│
+│ Chunker      │  │   │   (intra-fuse)  │  │   │   (naive|ragas)  │
+│              │  │   ├ 3 InterVariant  │  │   ├ GateThresholds   │
+└──────┬───────┘  │   ├ 4-5 Rerank      │  │   └ ArtifactWriter   │
+       │          │   ├ 7 Filter        │  └──────────┬───────────┘
+       │          │   ├ 8 ParentDoc     │             │
+       │          │   ├ 9 Cite          │             ▼
+       │          │   └ 10 Gen (LLM)    │  ┌─────────────────────┐
+       │          │                     │  │   Audit (5e)          │
+       │          │ Citation DTOs +     │  │   └ NDJSON per request│
+       │          │ SearchResult (Pydantic)  └─────────────────────┘
+       │          └──────────┬──────────┘
        │                     ▼
 ┌──────┴────────────────────────────────────────────────────────────┐
 │  Domain Layer (Pydantic v2)                                        │
@@ -121,34 +120,40 @@ for full contract specifications.
 ## Eval loop (5h-5i)
 
 ```
-   eval.jsonl                          data/eval.jsonl (generated)
-   ┌────────────────────┐             ┌──────────────────────┐
-   │ query              │             │ query + retrieved +   │
-   │ dataset_ids        │             │ ground_truth +       │
-   │ ground_truth_ids   │  ──eval──►  │ contexts              │
-   │ k                 │             │ + answer              │
-   └─────────┬──────────┘             └──────────────────────┘
-             │                                  │
-             ▼                                  ▼
-   ┌────────────────────┐             ┌──────────────────────┐
-   │ EvalRunner          │   ┌───────►│ RAGAS metrics (stub) │
-   │  ├ metrics:        │   │        │  faithfulness       │
-   │  │  recall@K       │   │        │  answer_relevance    │
-   │  │  precision@K    │   │        │  context_precision   │
-   │  │  hit_rate@K     │   │        └──────────────────────┘
-   │  │  mrr           │   │
-   │  │  ndcg@K       │   │
-   │  └ aggregate       │   │
-   └────────────────────┘   │
+   eval.jsonl (单条 record, 含检索+生成 ground truth)
+   ┌──────────────────────────────────────────────────┐
+   │ query | dataset_ids | ground_truth_chunk_ids     │
+   │ k | reference_answer | reference_contexts        │
+   └─────────────────────────┬────────────────────────┘
+                             │
                              ▼
-                  ┌──────────────────────┐
-                  │ EvalSummary            │
-                  │  ├ sample_count        │
-                  │  ├ metric_aggregates   │
-                  │  │   {mean, std, ...}  │
-                  │  └ warnings            │
-                  └──────────────────────┘
+              ┌──────────────────────────────┐
+              │  UnifiedEvalRunner           │
+              │  ├ EvalConfig                │
+              │  │   gen_backend: naive|     │
+              │  │               ragas|skip  │
+              │  ├ GenMetricsBackend         │
+              │  ├ GateThresholds            │
+              │  │   min_recall_at_k=0.7     │
+              │  │   min_faithfulness=0.8    │
+              │  ├ ArtifactWriter (optional) │
+              │  └ baseline_diff (optional)  │
+              └──────────────┬───────────────┘
+                             │
+                             ▼
+              ┌──────────────────────────────┐
+              │ UnifiedEvalSummary           │
+              │  ├ sample_count              │
+              │  ├ metric_aggregates         │
+              │  ├ baseline_delta            │
+              │  ├ gate: passed|fail         │
+              │  └ exit_code: 0|1            │
+              └──────────────────────────────┘
 ```
+
+旧版 ``EvalRunner`` (retrieval-only) + ``RagasRunner`` (gen-only) 已合并删除。
+``RagasRealRunner`` 改名为 ``backends/ragas.RagasBackend`` 实现同一协议。
+Stub metrics 改名为 ``backends/naive.NaiveBackend``, docstring 明确标注非真实语义指标。
 
 ## CI (5j)
 

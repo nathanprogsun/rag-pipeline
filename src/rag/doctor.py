@@ -331,7 +331,7 @@ async def main() -> int:
             "ragas (optional)",
             "warn",
             "未安装",
-            "跑 RagasRealRunner 时需要; 安装: `uv sync --extra dev` (ragas 在 dev 依赖里)",
+            "跑 RagasBackend 时需要; 安装: `uv sync --extra dev` (ragas 在 dev 依赖里)",
         )
 
     report.print()

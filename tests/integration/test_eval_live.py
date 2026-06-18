@@ -26,7 +26,8 @@ import pytest
 from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rag.eval.runner import EvalRunner
+from rag.eval.config import EvalConfig
+from rag.eval.runner import UnifiedEvalRunner
 from rag.search.factory import SearchPipelineDeps, build_search_pipeline
 from tests.integration._db_helpers import create_dataset, seed_chunks
 
@@ -83,7 +84,9 @@ async def test_real_eval_perfect_match_recall_one(
 
     deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
     pipeline = build_search_pipeline(deps)
-    runner = EvalRunner(pipeline=pipeline.ainvoke)
+    runner = UnifiedEvalRunner(
+        pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
+    )
 
     summary = await runner.run(eval_path)
 
@@ -130,7 +133,9 @@ async def test_real_eval_zero_match_recall_zero(
 
     deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
     pipeline = build_search_pipeline(deps)
-    runner = EvalRunner(pipeline=pipeline.ainvoke)
+    runner = UnifiedEvalRunner(
+        pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
+    )
 
     summary = await runner.run(eval_path)
 
@@ -194,7 +199,9 @@ async def test_real_eval_multiple_queries_aggregate(
 
     deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
     pipeline = build_search_pipeline(deps)
-    runner = EvalRunner(pipeline=pipeline.ainvoke)
+    runner = UnifiedEvalRunner(
+        pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
+    )
 
     summary = await runner.run(eval_path)
 
@@ -246,7 +253,9 @@ async def test_real_eval_hit_rate_at_k(
 
     deps = SearchPipelineDeps(embedder=live_embed_model, llm=_fake_llm())
     pipeline = build_search_pipeline(deps)
-    runner = EvalRunner(pipeline=pipeline.ainvoke)
+    runner = UnifiedEvalRunner(
+        pipeline=pipeline.ainvoke, config=EvalConfig(gen_backend="skip")
+    )
 
     summary = await runner.run(eval_path)
 

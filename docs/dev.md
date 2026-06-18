@@ -43,7 +43,13 @@ uv run pytest tests/unit/test_fusion.py::test_intra_per_group_weight_applied -v
 ```bash
 uv run rag-ingest --help
 uv run rag-search -q "test" --dataset-id <UUID>
+
+# Eval: 一份 JSONL 同时跑检索 + 生成指标 + 可选 gate + 可选 baseline diff
 uv run rag-eval -d data/eval.jsonl
+uv run rag-eval -d data/eval.jsonl --backend ragas --baseline last.json
+uv run rag-eval -d data/eval.jsonl --artifact-dir artifacts/ \
+    --min-recall-at-k 0.7 --min-faithfulness 0.8
+# exit code: 0 (passed) | 1 (gate failed), 供 CI `set -e` 使用
 ```
 
 ### Format + lint

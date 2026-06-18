@@ -20,7 +20,8 @@ from typer.testing import CliRunner
 from rag.domain.document import ChunkMetadata, ScoredDocument
 from rag.domain.search import Citation, SearchRequest, SearchResult
 from rag.eval.cli import app as eval_app
-from rag.eval.runner import EvalSummary
+from rag.eval.gate import GateResult
+from rag.eval.runner import UnifiedEvalSummary
 from rag.search.cli import app as search_app
 
 runner = CliRunner()
@@ -314,9 +315,10 @@ def test_eval_text_output(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
 
-    fake_summary = EvalSummary(
+    fake_summary = UnifiedEvalSummary(
         sample_count=0,
         metric_aggregates={},
+        gate=GateResult(passed=True),
         warnings=["empty dataset"],
     )
     fake_embedder = MagicMock()
@@ -324,7 +326,7 @@ def test_eval_text_output(tmp_path: Path) -> None:
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
+        patch("rag.eval.cli.UnifiedEvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
         mock_runner.run = AsyncMock(return_value=fake_summary)
@@ -342,9 +344,10 @@ def test_eval_json_output(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
 
-    fake_summary = EvalSummary(
+    fake_summary = UnifiedEvalSummary(
         sample_count=0,
         metric_aggregates={},
+        gate=GateResult(passed=True),
         warnings=[],
     )
     fake_embedder = MagicMock()
@@ -352,7 +355,7 @@ def test_eval_json_output(tmp_path: Path) -> None:
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
+        patch("rag.eval.cli.UnifiedEvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
         mock_runner.run = AsyncMock(return_value=fake_summary)
@@ -373,7 +376,7 @@ def test_eval_output_path_writes_file(tmp_path: Path) -> None:
     file write inside ``EvalRunner.run``).
     """
     from rag.domain.search import SearchResult
-    from rag.eval.runner import EvalRunner as RealEvalRunner
+    from rag.eval.runner import UnifiedEvalRunner as RealEvalRunner
 
     f = tmp_path / "eval.jsonl"
     # Write 2 valid records
@@ -408,11 +411,16 @@ def test_eval_output_path_writes_file(tmp_path: Path) -> None:
     fake_embedder = MagicMock()
     fake_llm = MagicMock()
 
-    real_runner = RealEvalRunner(pipeline=_fake_pipeline, default_k=10, concurrency=1)
+    real_runner = RealEvalRunner(
+        pipeline=_fake_pipeline,
+        config=__import__("rag.eval.config", fromlist=["EvalConfig"]).EvalConfig(
+            gen_backend="skip", default_k=10, concurrency=1
+        ),
+    )
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.eval.cli.EvalRunner", return_value=real_runner),
+        patch("rag.eval.cli.UnifiedEvalRunner", return_value=real_runner),
     ):
         result = runner.invoke(
             eval_app,
@@ -430,9 +438,10 @@ def test_eval_warning_printed_to_stderr(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
 
-    fake_summary = EvalSummary(
+    fake_summary = UnifiedEvalSummary(
         sample_count=0,
         metric_aggregates={},
+        gate=GateResult(passed=True),
         warnings=["pipeline failed"],
     )
     fake_embedder = MagicMock()
@@ -440,7 +449,7 @@ def test_eval_warning_printed_to_stderr(tmp_path: Path) -> None:
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
-        patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
+        patch("rag.eval.cli.UnifiedEvalRunner") as mock_runner_cls,
     ):
         mock_runner = MagicMock()
         mock_runner.run = AsyncMock(return_value=fake_summary)
@@ -460,14 +469,19 @@ def test_eval_passes_correct_args_to_runner(tmp_path: Path) -> None:
     f = tmp_path / "eval.jsonl"
     f.write_text("", encoding="utf-8")
 
-    fake_summary = EvalSummary(sample_count=0, metric_aggregates={}, warnings=[])
+    fake_summary = UnifiedEvalSummary(
+        sample_count=0,
+        metric_aggregates={},
+        gate=GateResult(passed=True),
+        warnings=[],
+    )
     fake_embedder = MagicMock()
     fake_llm = MagicMock()
     with (
         patch("rag.eval.cli.get_embed_model", return_value=fake_embedder),
         patch("rag.eval.cli.get_chat_model", return_value=fake_llm),
         patch("rag.eval.cli.build_search_pipeline") as mock_build,
-        patch("rag.eval.cli.EvalRunner") as mock_runner_cls,
+        patch("rag.eval.cli.UnifiedEvalRunner") as mock_runner_cls,
     ):
         mock_pipeline = MagicMock()
         mock_pipeline.ainvoke = AsyncMock()
@@ -492,7 +506,7 @@ def test_eval_passes_correct_args_to_runner(tmp_path: Path) -> None:
     assert result.exit_code == 0, f"stderr={result.stderr!r}"
     mock_runner_cls.assert_called_once()
     call = mock_runner_cls.call_args
-    # concurrency=8
-    assert call.kwargs["concurrency"] == 8
-    # default_k=20
-    assert call.kwargs["default_k"] == 20
+    # 统一 runner 接 EvalConfig, 字段从 config 取
+    cfg = call.kwargs["config"]
+    assert cfg.concurrency == 8
+    assert cfg.default_k == 20

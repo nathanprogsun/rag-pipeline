@@ -18,7 +18,7 @@ import pytest
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import Runnable
 
-from rag.eval.ragas_real import RagasRealRunner
+from rag.eval.backends.ragas import RagasBackend
 from rag.infra.llm.chat import get_chat_model
 from tests.integration.conftest import _require_api_key
 
@@ -51,17 +51,17 @@ async def test_real_ragas_end_to_end(
 
     Skips if any of OPENAI_API_KEY / OPENAI_EMBEDDING_API_KEY missing.
     """
-    runner = RagasRealRunner(
+    runner = RagasBackend(
         llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
     result = await runner.compute(
-        user_input="What is Python?",
-        response=(
+        query="What is Python?",
+        answer=(
             "Python is a high-level, interpreted programming language known "
             "for its readability and broad standard library. [1](CITE)"
         ),
-        retrieved_contexts=[
+        contexts=[
             "Python is a high-level, interpreted, general-purpose programming "
             "language. Its design philosophy emphasizes code readability."
         ],
@@ -84,16 +84,16 @@ async def test_real_ragas_faithfulness_high(
 
     Skips if API key missing.
     """
-    runner = RagasRealRunner(
+    runner = RagasBackend(
         llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
     context_text = "Python was created by Guido van Rossum and first released in 1991."
     result = await runner.compute(
-        user_input="When was Python first released?",
+        query="When was Python first released?",
         # Response claims only what context supports.
-        response="Python was first released in 1991.",
-        retrieved_contexts=[context_text],
+        answer="Python was first released in 1991.",
+        contexts=[context_text],
         reference="",
     )
 
@@ -113,14 +113,14 @@ async def test_real_ragas_failure_isolated(
     Empty contexts + empty reference + bad input. At least answer_relevancy
     should still return a value (using the response embedding).
     """
-    runner = RagasRealRunner(
+    runner = RagasBackend(
         llm=real_llm_chat_model,  # type: ignore[arg-type]
         embeddings=live_embed_model,
     )
     result = await runner.compute(
-        user_input="",
-        response="",
-        retrieved_contexts=[],
+        query="",
+        answer="",
+        contexts=[],
         reference="",
     )
     # Not asserting specific values — just that compute() returns without
