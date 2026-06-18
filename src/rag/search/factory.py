@@ -104,6 +104,7 @@ class _SearchPipelineImpl:
         query_ext = QueryExtensionRunnable(
             model=settings.openai_model,
             k=req.context.max_query_variants,
+            llm=self.deps.llm,
         )
 
         return SearchPipeline(

@@ -20,6 +20,13 @@ from rag.ingest.pipeline import IngestPipeline, expand_paths
 runner = CliRunner()
 
 
+def _strip_ansi(text: str) -> str:
+    """Strip ANSI escape sequences (rich rendering inserts codes between tokens)."""
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # expand_paths 纯函数测试 (pipeline 层)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,16 +223,17 @@ def test_help_lists_targets_and_dataset() -> None:
     assert "ingest-url" not in result.output
     assert "ingest-buffer" not in result.output
     assert "TARGETS" in result.output
-    assert "--dataset-name" in result.output
+    assert "--dataset-name" in _strip_ansi(result.output)
 
 
 def test_help_lists_dataset_options() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0, result.output
-    assert "--dataset-name" in result.output
-    assert "--dataset-id" in result.output
-    assert "--recursive" not in result.output
-    assert "--normalize" not in result.output
+    clean = _strip_ansi(result.output)
+    assert "--dataset-name" in clean
+    assert "--dataset-id" in clean
+    assert "--recursive" not in clean
+    assert "--normalize" not in clean
 
 
 def test_ingest_real_fixtures_multi_file() -> None:

@@ -16,6 +16,13 @@ from rag.ingest.normalizer import StructureMode, StructureNormalizer
 runner = CliRunner()
 
 
+def _strip_ansi(text: str) -> str:
+    """Strip ANSI escape sequences (rich rendering inserts codes between tokens)."""
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def test_default_pipeline_uses_structure_normalizer_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -56,5 +63,6 @@ def test_default_pipeline_forbid_without_api_key(
 def test_ingest_help_lists_mode_and_dataset() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0, result.output
-    assert "--dataset-name" in result.output
-    assert "--dataset-id" in result.output
+    clean = _strip_ansi(result.output)
+    assert "--dataset-name" in clean
+    assert "--dataset-id" in clean
