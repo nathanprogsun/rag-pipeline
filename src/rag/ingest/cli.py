@@ -127,13 +127,20 @@ def _render_outcome(outcome: IngestOutcome) -> bool:
 
 def default_pipeline(persist_config: PersistConfig | None = None) -> IngestPipeline:
     chunker = Chunker(ChunkSettings())
-    chat_model = get_structured_chat_model(
-        StructuredText,
-        temperature=0.1,
-        timeout=_LLM_TIMEOUT_SEC,
-        include_raw=True,
-    )
-    normalizer = StructureNormalizer(chat_model=chat_model, mode=StructureMode.AUTO)
+
+    # 有 API key 时启用 LLM 段落重写; 否则降级为透传 (FORBID)
+    has_api_key = bool(settings.openai_api_key.get_secret_value().strip())
+    if has_api_key:
+        chat_model = get_structured_chat_model(
+            StructuredText,
+            temperature=0.1,
+            timeout=_LLM_TIMEOUT_SEC,
+            include_raw=True,
+        )
+        normalizer = StructureNormalizer(chat_model=chat_model, mode=StructureMode.AUTO)
+    else:
+        normalizer = StructureNormalizer(chat_model=None, mode=StructureMode.FORBID)
+
     return IngestPipeline(
         chunker=chunker,
         normalizer=normalizer,
@@ -162,13 +169,6 @@ def run_ingest(
         "ingest.cli.start targets=%s persist=%s", targets, persist_config is not None
     )
 
-    if not settings.openai_api_key.get_secret_value().strip():
-        typer.echo(
-            f"ingest failed: [{ConfigErrorCode.MISSING_ENV}] "
-            "OPENAI_API_KEY required for default normalize=auto",
-            err=True,
-        )
-        raise typer.Exit(code=1)
     if persist_config is not None and persist_config.enabled:
         if not settings.openai_embedding_api_key.get_secret_value().strip():
             typer.echo(

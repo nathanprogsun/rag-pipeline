@@ -20,6 +20,7 @@ def test_default_pipeline_uses_structure_normalizer_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_model = MagicMock()
+    monkeypatch.setattr(settings, "openai_api_key", SecretStr("sk-fake"))
     monkeypatch.setattr(
         "rag.ingest.cli.get_structured_chat_model",
         lambda *args, **kwargs: fake_model,
@@ -27,15 +28,29 @@ def test_default_pipeline_uses_structure_normalizer_auto(
     pipeline = default_pipeline(persist_config=None)
     assert isinstance(pipeline.normalizer, StructureNormalizer)
     assert pipeline.normalizer._mode is StructureMode.AUTO  # noqa: SLF001
+    assert pipeline.normalizer._chat_model is fake_model  # noqa: SLF001
 
 
-def test_ingest_without_api_key_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ingest_succeeds_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing API key → 降级为 FORBID normalizer (透传), 不报错。"""
     monkeypatch.setattr(settings, "openai_api_key", SecretStr(""))
     result = runner.invoke(app, [str(SAMPLE_MD)])
-    assert result.exit_code == 1
-    combined = result.output + result.stderr
-    assert "config.missing_env" in combined
-    assert "OPENAI_API_KEY" in combined
+    assert result.exit_code == 0, result.output
+    assert "title: " in result.output
+    assert "chunks: " in result.output
+
+
+def test_default_pipeline_forbid_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证无 API key 时 default_pipeline 使用 FORBID + chat_model=None。"""
+    monkeypatch.setattr(settings, "openai_api_key", SecretStr(""))
+    pipeline = default_pipeline(persist_config=None)
+    assert isinstance(pipeline.normalizer, StructureNormalizer)
+    assert pipeline.normalizer._mode is StructureMode.FORBID  # noqa: SLF001
+    assert pipeline.normalizer._chat_model is None  # noqa: SLF001
 
 
 def test_ingest_help_lists_mode_and_dataset() -> None:
